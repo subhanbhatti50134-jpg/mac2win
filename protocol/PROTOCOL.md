@@ -124,6 +124,7 @@ Request:
 
 ```json
 {
+  "deviceId": "uuid-v4 (returned by /v1/pair)",
   "deviceName": "MacBook Pro",
   "clientNonce": "base64(32B)",
   "serverNonce": "base64(echo of challenge)",

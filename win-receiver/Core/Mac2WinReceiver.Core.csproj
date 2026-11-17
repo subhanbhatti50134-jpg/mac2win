@@ -13,4 +13,9 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Kestrel/ASP.NET for the receiver's HTTPS endpoint; still cross-platform net10.0 (ADR-002) -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
 </Project>

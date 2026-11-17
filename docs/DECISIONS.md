@@ -90,3 +90,16 @@ Format per SPEC §1.3: Context / Options / Decision / Consequences.
 - **Context:** SPEC §3 says "JSON control endpoints, streamed binary chunk bodies".
 - **Decision:** Control plane = JSON over HTTPS; data plane = `PUT /v1/sessions/{sid}/files/{fid}/chunks/{index}` with the raw bytes as body and `X-Chunk-SHA256` header. Receiver verifies the header hash before persisting the journal entry.
 - **Consequences:** Simple, curl-testable, streams through Kestrel with backpressure; no multipart boundary overhead. Small-file pipelining (SPEC §5) will be added at M3/M5 via a batched endpoint if round-trip cost shows up in benchmarks — recorded now so the endpoint shape is versioned.
+
+## ADR-013: Symlinks are excluded, not preserved (recorded in ledger)
+
+- **Context:** SPEC requires byte-fidelity for file contents; symlink preservation (re-creating links on Windows) needs privilege/developer-mode semantics and can escape the destination tree.
+- **Decision:** A manifest entry with `type: "symlink"` is planned as `EXCLUDED_BY_POLICY` with reason `POLICY_SYMLINK_NOT_PRESERVED`, counted in ledger `Excluded`, and never written. Apple metadata (`.DS_Store` → `POLICY_DOT_DS_STORE`, `._*` AppleDouble) is excluded the same way. Symlink *targets* are never followed for reading.
+- **Consequences:** Destination is always a tree of real files/dirs; no reparse-point injection vector. Users who need links must re-create them manually; the ledger makes the omission explicit rather than silent.
+
+## ADR-014: Ephemeral TLS key must round-trip through a PFX (schannel constraint)
+
+- **Context:** M1's first integration run failed every TLS handshake with *"Authentication failed because the platform does not support ephemeral keys"*. CertificateRequest.CreateSelfSigned returns a certificate whose private key lives in an in-memory (ephemeral) CNG key; Windows schannel refuses to use such a key as a server certificate, closing the connection before ServerHello.
+- **Decision:** `CertificateProvider.CreateEphemeral` now exports the fresh certificate to PFX and re-imports it via `X509CertificateLoader.LoadPkcs12(..., X509KeyStorageFlags.Exportable)`. No `PersistKeySet` flag, so the key container is deleted when the certificate is disposed — per-process ephemerality (M1 behavior) is preserved; M2's DPAPI persistence (ADR-007) will import with `PersistKeySet | UserKeySet` instead. The cert also gains an explicit `serverAuth` EKU.
+- **Alternatives considered:** (a) `X509KeyStorageFlags.EphemeralKeySet` on import — same schannel rejection; (b) disable TLS — violates SPEC §4/§7; (c) `AllowSynchronousIO`/other Kestrel tweaks — unrelated to the failure.
+- **Consequences:** Fingerprint is computed after the round-trip (DER is unchanged, so pinning is unaffected). Any test that constructs a server certificate must use this factory; a raw `CreateSelfSigned` cert will handshake-fail on Windows.

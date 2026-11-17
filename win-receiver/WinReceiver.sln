@@ -11,6 +11,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Core.Tests", "Core.Tests", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mac2WinReceiver.Core.Tests", "Core.Tests\Mac2WinReceiver.Core.Tests.csproj", "{6EEE7384-ED57-4DEF-A8D5-E0FDE213774C}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ReceiverHost", "ReceiverHost", "{C2E7AFE4-A988-5B61-31E3-7A03A9FB5852}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mac2WinReceiver.Host", "ReceiverHost\Mac2WinReceiver.Host.csproj", "{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -45,6 +49,18 @@ Global
 		{6EEE7384-ED57-4DEF-A8D5-E0FDE213774C}.Release|x64.Build.0 = Release|Any CPU
 		{6EEE7384-ED57-4DEF-A8D5-E0FDE213774C}.Release|x86.ActiveCfg = Release|Any CPU
 		{6EEE7384-ED57-4DEF-A8D5-E0FDE213774C}.Release|x86.Build.0 = Release|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Debug|x64.Build.0 = Debug|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Debug|x86.Build.0 = Debug|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Release|x64.ActiveCfg = Release|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Release|x64.Build.0 = Release|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Release|x86.ActiveCfg = Release|Any CPU
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -52,5 +68,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{DD0D9F92-6EC8-4E97-8029-E2EEEE134A79} = {FBF56CC3-7AE6-AD2D-3F14-7F97FD322CD6}
 		{6EEE7384-ED57-4DEF-A8D5-E0FDE213774C} = {4F408C96-1A07-34B4-58BB-3744B7E2D90E}
+		{0450A51F-0290-4862-BECB-5A6D0B0CCEF0} = {C2E7AFE4-A988-5B61-31E3-7A03A9FB5852}
 	EndGlobalSection
 EndGlobal

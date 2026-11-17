@@ -59,14 +59,58 @@ jobs:
         run: dotnet test win-receiver/WinReceiver.sln -c Release
       - name: Swift sender core build + tests (ADR-010)
         run: swift test --package-path mac-sender/Core
-      # M1 adds the cross-implementation job: real Swift sender ↔ real .NET receiver
-      # core over loopback with real TLS (protocol/PROTOCOL.md §1).
+      # The real Swift↔.NET loopback test lives in the dedicated `cross-impl` job below
+      # (protocol/PROTOCOL.md §1): it needs a running receiver process.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: macos-test-results
           path: "**/TestResults/**"
           if-no-files-found: ignore
+
+  cross-impl:
+    name: Cross-implementation (Swift sender ↔ .NET receiver)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build receiver (Release)
+        run: dotnet build win-receiver/WinReceiver.sln -c Release
+      - name: Start receiver (loopback, fixed PIN, auto-approve — test harness only)
+        run: |
+          LOG="$RUNNER_TEMP/receiver.log"
+          DEST="$RUNNER_TEMP/m2w-dst"
+          mkdir -p "$DEST"
+          nohup dotnet run --project win-receiver/ReceiverHost -c Release --no-build -- \
+            --destination "$DEST" --port 48610 --pin 123456 --auto-approve \
+            >"$LOG" 2>&1 &
+          echo "RECEIVER_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 60); do
+            if grep -q 'cert:' "$LOG" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat "$LOG"
+          grep -q 'cert:' "$LOG"
+      - name: Export receiver endpoint for the Swift test
+        run: |
+          FP="$(grep -o 'sha256:[0-9a-fA-F]*' "$RUNNER_TEMP/receiver.log" | head -1 | cut -d: -f2)"
+          test -n "$FP"
+          {
+            echo "M2W_RECEIVER_URL=https://127.0.0.1:48610"
+            echo "M2W_FINGERPRINT=$FP"
+            echo "M2W_PIN=123456"
+            echo "M2W_DESTINATION=$RUNNER_TEMP/m2w-dst"
+          } >> "$GITHUB_ENV"
+      - name: Swift sender unit + cross-implementation tests
+        run: swift test --package-path mac-sender/Core
+      - name: Receiver log
+        if: always()
+        run: cat "$RUNNER_TEMP/receiver.log"
+      - name: Stop receiver
+        if: always()
+        run: kill "$RECEIVER_PID" || true
 
   linux:
     name: Receiver core tests (ubuntu)
