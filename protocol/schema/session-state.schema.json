@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mac2win.local/schema/session-state.schema.json",
+  "title": "SessionStateResponse",
+  "description": "GET /v1/sessions/{id}/state — resume source of truth (protocol/PROTOCOL.md §2.9).",
+  "type": "object",
+  "required": ["status", "manifestDigest", "chunkSize", "completed", "partial"],
+  "additionalProperties": true,
+  "properties": {
+    "status": { "enum": ["AWAITING_APPROVAL", "MANIFEST_RECEIVING", "PREFLIGHT_READY", "TRANSFERRING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED", "DENIED", "EXPIRED"] },
+    "manifestDigest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "chunkSize": { "type": "integer", "minimum": 1048576, "maximum": 67108864 },
+    "completed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "fileSha256"],
+        "additionalProperties": true,
+        "properties": {
+          "path": { "type": "string" },
+          "fileSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "partial": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "fileId", "verifiedChunks"],
+        "additionalProperties": true,
+        "properties": {
+          "path": { "type": "string" },
+          "fileId": { "type": "string" },
+          "verifiedChunks": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+          "nextChunk": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "cursor": { "type": ["string", "null"] }
+  }
+}

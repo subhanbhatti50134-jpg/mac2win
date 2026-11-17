@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mac2win.local/schema/error.schema.json",
+  "title": "ErrorResponse",
+  "description": "Body of every non-2xx response. See error table in protocol/PROTOCOL.md §5.",
+  "type": "object",
+  "required": ["error"],
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "additionalProperties": true,
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^E_[A-Z_]+$",
+          "enum": [
+            "E_BAD_REQUEST", "E_UNSUPPORTED_VERSION", "E_UNAUTHORIZED", "E_NOT_PAIRED",
+            "E_PIN_INVALID", "E_PIN_EXPIRED", "E_PIN_LOCKED", "E_APPROVAL_DENIED",
+            "E_SESSION_NOT_FOUND", "E_SESSION_EXPIRED", "E_SESSION_STATE",
+            "E_MANIFEST_TOO_LARGE", "E_LIMIT_EXCEEDED", "E_PATH_REJECTED",
+            "E_CONFLICT_UNRESOLVED", "E_CHUNK_HASH_MISMATCH", "E_FILE_HASH_MISMATCH",
+            "E_SOURCE_CHANGED", "E_INSUFFICIENT_STORAGE", "E_DESTINATION_ERROR",
+            "E_RATE_LIMITED", "E_IDLE_TIMEOUT", "E_INTERNAL"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Developer-facing, never contains file contents or PINs." },
+        "retryable": { "type": "boolean" },
+        "details": { "type": "object" }
+      }
+    }
+  }
+}

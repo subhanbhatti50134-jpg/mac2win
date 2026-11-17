@@ -1,0 +1,21 @@
+{
+  "_comment": "HKDF/HMAC binding per protocol/PROTOCOL.md §2.3. TEST PIN only — runtime PINs are CSPRNG, single-use, never logged.",
+  "pin": "483920",
+  "certFingerprintSha256": "221da2076e8264f5df85c7f42284b1dc9e172614ddc62b6087bccbc256d560b6",
+  "serverNonceB64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "clientNonceB64": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+  "devicePublicKeyB64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/",
+  "hkdf": {
+    "ikm": "ASCII(pin)",
+    "salt": "ASCII(certFingerprintHex)",
+    "info": "mac2win-pair-v1",
+    "length": 32
+  },
+  "pinKeyHex": "3c4212c003dac4ac187df48f435651a330bd56571d83993bf285308140cad9bc",
+  "hmacMessageUtf8": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=|AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=|MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/",
+  "pinProofHex": "e94f6728473a3279b161c8670b4ecbd89c2f1a2ce6a30f0a808d8e0249aa9a4e",
+  "deviceAuth": {
+    "_comment": "ECDSA P-256/SHA-256 signature input for /v1/auth/hello (server verifies; vector covers the message bytes only).",
+    "signedMessageUtf8": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=|AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+  }
+}

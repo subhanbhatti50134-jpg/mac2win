@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mac2win.local/schema/report.schema.json",
+  "title": "SessionReport",
+  "description": "Completion report. Invariant: every manifest entry appears exactly once in items and totals reconcile (SPEC §5).",
+  "type": "object",
+  "required": ["sessionId", "status", "totals", "items"],
+  "additionalProperties": true,
+  "properties": {
+    "sessionId": { "type": "string", "format": "uuid" },
+    "status": { "enum": ["COMPLETED", "FAILED", "CANCELLED"] },
+    "startedAt": { "type": "string", "pattern": "^[0-9]{1,19}$" },
+    "finishedAt": { "type": "string", "pattern": "^[0-9]{1,19}$" },
+    "totals": {
+      "type": "object",
+      "required": ["items", "verified", "bytesVerified"],
+      "additionalProperties": true,
+      "properties": {
+        "items": { "type": "integer", "minimum": 0 },
+        "verified": { "type": "integer", "minimum": 0 },
+        "renamed": { "type": "integer", "minimum": 0 },
+        "replaced": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "excluded": { "type": "integer", "minimum": 0 },
+        "unreadable": { "type": "integer", "minimum": 0 },
+        "cloudPlaceholder": { "type": "integer", "minimum": 0 },
+        "changed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "bytesVerified": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "outcome"],
+        "additionalProperties": true,
+        "properties": {
+          "path": { "type": "string" },
+          "finalPath": { "type": "string" },
+          "outcome": {
+            "enum": ["VERIFIED", "RENAMED", "REPLACED", "SKIPPED_BY_USER",
+                     "EXCLUDED_BY_POLICY", "UNREADABLE", "CLOUD_PLACEHOLDER",
+                     "CHANGED_DURING_TRANSFER", "FAILED"]
+          },
+          "reason": { "type": "string" },
+          "size": { "type": "integer", "minimum": 0 },
+          "fileSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "errorCode": { "type": "string" }
+        }
+      }
+    }
+  }
+}

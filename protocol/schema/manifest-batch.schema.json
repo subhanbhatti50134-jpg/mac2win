@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mac2win.local/schema/manifest-batch.schema.json",
+  "title": "ManifestBatchRequest",
+  "type": "object",
+  "required": ["batchIndex", "final", "entries"],
+  "additionalProperties": true,
+  "properties": {
+    "batchIndex": { "type": "integer", "minimum": 0 },
+    "final": { "type": "boolean" },
+    "entries": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "manifest-entry.schema.json" }
+    },
+    "manifestDigest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Required iff final == true. Canonical form: protocol/PROTOCOL.md §2.7.1."
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "final": { "const": true } } }, "then": { "required": ["manifestDigest"] } }
+  ]
+}

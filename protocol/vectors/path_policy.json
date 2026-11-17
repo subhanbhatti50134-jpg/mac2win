@@ -1,0 +1,277 @@
+{
+  "_comment": "SPEC §6.1/§6.2 path policy: NFC normalization, sanitization, rejection, Apple policy exclusions, case-fold collisions.",
+  "sanitize": [
+    {
+      "input": "Photos/2024/IMG_1234.jpg",
+      "verdict": "ACCEPT",
+      "finalPath": "Photos/2024/IMG_1234.jpg"
+    },
+    {
+      "input": "empty-dir",
+      "verdict": "ACCEPT",
+      "finalPath": "empty-dir"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt",
+      "verdict": "ACCEPT",
+      "finalPath": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt",
+      "note": "component exactly at the 255 UTF-16 limit"
+    },
+    {
+      "input": "deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/file.bin",
+      "verdict": "ACCEPT",
+      "finalPath": "deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/file.bin",
+      "note": "path > 260 chars: ACCEPT, receiver uses \\\\?\\ long-path support"
+    },
+    {
+      "input": "a<b>c.txt",
+      "verdict": "SANITIZE",
+      "finalPath": "a_b_c.txt"
+    },
+    {
+      "input": "what?.txt",
+      "verdict": "SANITIZE",
+      "finalPath": "what_.txt"
+    },
+    {
+      "input": "name with trailing. ",
+      "verdict": "SANITIZE",
+      "finalPath": "name with trailing"
+    },
+    {
+      "input": "trailing dot.",
+      "verdict": "SANITIZE",
+      "finalPath": "trailing dot"
+    },
+    {
+      "input": "CON",
+      "verdict": "SANITIZE",
+      "finalPath": "CON_"
+    },
+    {
+      "input": "con.txt",
+      "verdict": "SANITIZE",
+      "finalPath": "con_.txt"
+    },
+    {
+      "input": "COM1/report.txt",
+      "verdict": "SANITIZE",
+      "finalPath": "COM1_/report.txt"
+    },
+    {
+      "input": "lpt9.dat",
+      "verdict": "SANITIZE",
+      "finalPath": "lpt9_.dat"
+    },
+    {
+      "input": "auxfile",
+      "verdict": "ACCEPT",
+      "finalPath": "auxfile",
+      "note": "reserved check is on the exact stem before first dot; 'auxfile' != AUX"
+    },
+    {
+      "input": "colon:name.txt",
+      "verdict": "SANITIZE",
+      "finalPath": "colon_name.txt",
+      "note": "colon would create an NTFS alternate data stream"
+    },
+    {
+      "input": "./rel/./path.txt",
+      "verdict": "SANITIZE",
+      "finalPath": "rel/path.txt"
+    },
+    {
+      "input": "dot..txt",
+      "verdict": "ACCEPT",
+      "finalPath": "dot..txt",
+      "note": "interior dots are legal; only trailing dots are trimmed"
+    },
+    {
+      "input": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.dat",
+      "verdict": "SANITIZE",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c",
+      "note": "over-long component: truncate to 246 UTF-16 units + '-' + sha256(component)[:8]"
+    },
+    {
+      "input": "../../etc/passwd",
+      "verdict": "REJECT",
+      "reason": "PATH_TRAVERSAL",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c"
+    },
+    {
+      "input": "/etc/passwd",
+      "verdict": "REJECT",
+      "reason": "ROOTED",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c"
+    },
+    {
+      "input": "\\\\server\\share\\x",
+      "verdict": "REJECT",
+      "reason": "UNC",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c"
+    },
+    {
+      "input": "C:/Windows/System32/evil.dll",
+      "verdict": "REJECT",
+      "reason": "DRIVE_LETTER",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c"
+    },
+    {
+      "input": "c:relative.txt",
+      "verdict": "REJECT",
+      "reason": "DRIVE_LETTER",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c"
+    },
+    {
+      "input": "bad\u0000name.txt",
+      "verdict": "REJECT",
+      "reason": "CONTROL_CHARACTER",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c"
+    },
+    {
+      "input": "bell\u0007.txt",
+      "verdict": "REJECT",
+      "reason": "CONTROL_CHARACTER",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c"
+    }
+  ],
+  "exclusions": [
+    {
+      "input": ".DS_Store",
+      "excluded": true,
+      "reason": "POLICY_DOT_DS_STORE"
+    },
+    {
+      "input": "Vacation/.DS_Store",
+      "excluded": true,
+      "reason": "POLICY_DOT_DS_STORE"
+    },
+    {
+      "input": "._IMG_0001.HEIC",
+      "excluded": true,
+      "reason": "POLICY_APPLEDOUBLE"
+    },
+    {
+      "input": "Vacation/._notes",
+      "excluded": true,
+      "reason": "POLICY_APPLEDOUBLE"
+    },
+    {
+      "input": "__MACOSX/resource.txt",
+      "excluded": true,
+      "reason": "POLICY_MACOSX"
+    },
+    {
+      "input": "deep/__MACOSX/x",
+      "excluded": false,
+      "reason": null,
+      "note": "__MACOSX only excluded at top level"
+    },
+    {
+      "input": "image._final.jpg",
+      "excluded": false,
+      "reason": null,
+      "note": "AppleDouble prefix must start the component"
+    },
+    {
+      "input": "notes.txt",
+      "excluded": false,
+      "reason": null
+    },
+    {
+      "input": "Vacation/.Trashes/old",
+      "excluded": true,
+      "reason": "POLICY_TRASH"
+    },
+    {
+      "input": ".fseventsd/ticket",
+      "excluded": true,
+      "reason": "POLICY_FSEVENTSD"
+    },
+    {
+      "input": ".Spotlight-V100/index",
+      "excluded": true,
+      "reason": "POLICY_SPOTLIGHT"
+    },
+    {
+      "input": ".TemporaryItems/x",
+      "excluded": true,
+      "reason": "POLICY_TEMPITEMS"
+    }
+  ],
+  "nfc": [
+    {
+      "input": "café",
+      "nfc": "café"
+    },
+    {
+      "input": "volüme",
+      "nfc": "volüme"
+    },
+    {
+      "input": "café",
+      "nfc": "café"
+    },
+    {
+      "input": "Å",
+      "nfc": "Å"
+    },
+    {
+      "input": "Å",
+      "nfc": "Å"
+    },
+    {
+      "input": "🎉",
+      "nfc": "🎉"
+    }
+  ],
+  "caseCollisions": [
+    {
+      "a": "readme.txt",
+      "b": "README.txt",
+      "collide": true
+    },
+    {
+      "a": "café.txt",
+      "b": "café.txt",
+      "collide": true,
+      "note": "collide only after NFC normalization"
+    },
+    {
+      "a": "photo.jpg",
+      "b": "photo.jpg",
+      "collide": true,
+      "note": "identical"
+    },
+    {
+      "a": "photo.jpg",
+      "b": "photo.png",
+      "collide": false
+    },
+    {
+      "a": "Å.txt",
+      "b": "Å.txt",
+      "collide": true,
+      "note": "A-ring: NFC U+00C5 vs NFD A+U+030A - collide after NFC"
+    },
+    {
+      "a": "Á.txt",
+      "b": "Å.txt",
+      "collide": false,
+      "note": "A-acute U+00C1 vs A-ring U+00C5 - distinct"
+    }
+  ],
+  "caseCollisionRename": {
+    "note": "second+ colliding entry gets deterministic ' (n)' before the extension, n starting at 2",
+    "example": {
+      "inputOrder": [
+        "readme.txt",
+        "README.txt"
+      ],
+      "finalPaths": [
+        "readme.txt",
+        "README (2).txt"
+      ]
+    }
+  }
+}

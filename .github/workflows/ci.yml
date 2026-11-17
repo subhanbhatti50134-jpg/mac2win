@@ -1,0 +1,82 @@
+# CI for Mac2Win Transfer (SPEC §1.2, §10).
+# Local Windows machine runs the `windows` job's commands natively (see docs/VERIFICATION.md);
+# macOS and Linux jobs cover what cannot run locally (ADR-010).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  protocol-vectors:
+    name: Protocol golden vectors (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Vectors current + docs mirror in sync
+        run: python tools/gen_vectors.py --check
+
+  windows:
+    name: Windows receiver (build + tests)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Vectors current + docs mirror in sync
+        run: python tools/gen_vectors.py --check
+      - name: Build (warnings as errors)
+        run: dotnet build win-receiver/WinReceiver.sln -c Release
+      - name: Unit + protocol conformance tests
+        run: dotnet test win-receiver/WinReceiver.sln -c Release --no-build
+      - name: Dependency vulnerability audit
+        run: dotnet list win-receiver/WinReceiver.sln package --vulnerable --include-transitive
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-test-results
+          path: "**/TestResults/**"
+          if-no-files-found: ignore
+
+  macos:
+    name: macOS sender + cross-platform core
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Vectors current + docs mirror in sync
+        run: python3 tools/gen_vectors.py --check
+      - name: Receiver core tests (cross-platform, ADR-002)
+        run: dotnet test win-receiver/WinReceiver.sln -c Release
+      - name: Swift sender core build + tests (ADR-010)
+        run: swift test --package-path mac-sender/Core
+      # M1 adds the cross-implementation job: real Swift sender ↔ real .NET receiver
+      # core over loopback with real TLS (protocol/PROTOCOL.md §1).
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-test-results
+          path: "**/TestResults/**"
+          if-no-files-found: ignore
+
+  linux:
+    name: Receiver core tests (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Vectors current + docs mirror in sync
+        run: python3 tools/gen_vectors.py --check
+      - name: Receiver core tests (cross-platform, ADR-002)
+        run: dotnet test win-receiver/WinReceiver.sln -c Release

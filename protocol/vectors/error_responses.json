@@ -1,0 +1,258 @@
+{
+  "_comment": "Every non-2xx response body must match this shape; code<->HTTP<->retryable mapping is normative (protocol/PROTOCOL.md §5).",
+  "cases": [
+    {
+      "code": "E_BAD_REQUEST",
+      "httpStatus": 400,
+      "body": {
+        "error": {
+          "code": "E_BAD_REQUEST",
+          "message": "malformed request",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_UNSUPPORTED_VERSION",
+      "httpStatus": 400,
+      "body": {
+        "error": {
+          "code": "E_UNSUPPORTED_VERSION",
+          "message": "protocol version 2 is not supported",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_UNAUTHORIZED",
+      "httpStatus": 401,
+      "body": {
+        "error": {
+          "code": "E_UNAUTHORIZED",
+          "message": "token expired",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "code": "E_NOT_PAIRED",
+      "httpStatus": 403,
+      "body": {
+        "error": {
+          "code": "E_NOT_PAIRED",
+          "message": "device is not paired",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_PIN_INVALID",
+      "httpStatus": 403,
+      "body": {
+        "error": {
+          "code": "E_PIN_INVALID",
+          "message": "PIN proof does not match",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "code": "E_PIN_EXPIRED",
+      "httpStatus": 403,
+      "body": {
+        "error": {
+          "code": "E_PIN_EXPIRED",
+          "message": "PIN expired",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_PIN_LOCKED",
+      "httpStatus": 429,
+      "body": {
+        "error": {
+          "code": "E_PIN_LOCKED",
+          "message": "too many failed attempts",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "code": "E_APPROVAL_DENIED",
+      "httpStatus": 403,
+      "body": {
+        "error": {
+          "code": "E_APPROVAL_DENIED",
+          "message": "user declined the transfer",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_SESSION_NOT_FOUND",
+      "httpStatus": 404,
+      "body": {
+        "error": {
+          "code": "E_SESSION_NOT_FOUND",
+          "message": "unknown session",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_SESSION_EXPIRED",
+      "httpStatus": 410,
+      "body": {
+        "error": {
+          "code": "E_SESSION_EXPIRED",
+          "message": "session expired",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_SESSION_STATE",
+      "httpStatus": 409,
+      "body": {
+        "error": {
+          "code": "E_SESSION_STATE",
+          "message": "session is paused",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "code": "E_MANIFEST_TOO_LARGE",
+      "httpStatus": 413,
+      "body": {
+        "error": {
+          "code": "E_MANIFEST_TOO_LARGE",
+          "message": "manifest batch too large",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_LIMIT_EXCEEDED",
+      "httpStatus": 413,
+      "body": {
+        "error": {
+          "code": "E_LIMIT_EXCEEDED",
+          "message": "manifest depth limit exceeded",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_PATH_REJECTED",
+      "httpStatus": 400,
+      "body": {
+        "error": {
+          "code": "E_PATH_REJECTED",
+          "message": "path traversal rejected",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_CONFLICT_UNRESOLVED",
+      "httpStatus": 409,
+      "body": {
+        "error": {
+          "code": "E_CONFLICT_UNRESOLVED",
+          "message": "3 conflicts unresolved",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_CHUNK_HASH_MISMATCH",
+      "httpStatus": 422,
+      "body": {
+        "error": {
+          "code": "E_CHUNK_HASH_MISMATCH",
+          "message": "chunk 17 hash mismatch",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "code": "E_FILE_HASH_MISMATCH",
+      "httpStatus": 422,
+      "body": {
+        "error": {
+          "code": "E_FILE_HASH_MISMATCH",
+          "message": "final verification failed",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_SOURCE_CHANGED",
+      "httpStatus": 409,
+      "body": {
+        "error": {
+          "code": "E_SOURCE_CHANGED",
+          "message": "source file changed during transfer",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "code": "E_INSUFFICIENT_STORAGE",
+      "httpStatus": 507,
+      "body": {
+        "error": {
+          "code": "E_INSUFFICIENT_STORAGE",
+          "message": "destination needs 1048576 more bytes",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "code": "E_DESTINATION_ERROR",
+      "httpStatus": 500,
+      "body": {
+        "error": {
+          "code": "E_DESTINATION_ERROR",
+          "message": "destination is not writable",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "code": "E_RATE_LIMITED",
+      "httpStatus": 429,
+      "body": {
+        "error": {
+          "code": "E_RATE_LIMITED",
+          "message": "too many requests",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "code": "E_IDLE_TIMEOUT",
+      "httpStatus": 408,
+      "body": {
+        "error": {
+          "code": "E_IDLE_TIMEOUT",
+          "message": "idle for 300s",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "code": "E_INTERNAL",
+      "httpStatus": 500,
+      "body": {
+        "error": {
+          "code": "E_INTERNAL",
+          "message": "unexpected error",
+          "retryable": true
+        }
+      }
+    }
+  ]
+}

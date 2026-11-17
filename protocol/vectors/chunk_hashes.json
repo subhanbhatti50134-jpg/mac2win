@@ -1,0 +1,57 @@
+{
+  "_comment": "Data-plane hashing vectors. Whole-file SHA-256 = SHA-256 of the concatenation of chunks in index order.",
+  "seed": "mac2win-chunk-v1",
+  "cases": [
+    {
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "recipe": "sha256-chain: block_i = SHA256(seed || uint64be(i)), seed='mac2win-chunk-v1', concatenated, truncated to size"
+    },
+    {
+      "size": 1,
+      "sha256": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+      "recipe": "sha256-chain: block_i = SHA256(seed || uint64be(i)), seed='mac2win-chunk-v1', concatenated, truncated to size"
+    },
+    {
+      "size": 5,
+      "sha256": "d0f965639773bf09a1c7ec004711c327e351a6dc94f838175a9015c0a504b616",
+      "recipe": "sha256-chain: block_i = SHA256(seed || uint64be(i)), seed='mac2win-chunk-v1', concatenated, truncated to size"
+    },
+    {
+      "size": 1048576,
+      "sha256": "2df15b0ab266f964e007653becda748b39a0421e711f2e07594c3f75ef8edf75",
+      "recipe": "sha256-chain: block_i = SHA256(seed || uint64be(i)), seed='mac2win-chunk-v1', concatenated, truncated to size"
+    },
+    {
+      "size": 4194303,
+      "sha256": "adc885b0a715f06110b194f24d8e35df7a0a05dcf3d4296eae7cae76639098e8",
+      "recipe": "sha256-chain: block_i = SHA256(seed || uint64be(i)), seed='mac2win-chunk-v1', concatenated, truncated to size"
+    },
+    {
+      "size": 4194304,
+      "sha256": "2980087f7f91b18a431d34d7a5397217dc2f5009b68527eecf8e8f5173051454",
+      "recipe": "sha256-chain: block_i = SHA256(seed || uint64be(i)), seed='mac2win-chunk-v1', concatenated, truncated to size"
+    },
+    {
+      "size": 4194305,
+      "sha256": "731f2bae747980d17fa9cc1d788e3a4e0dfb233092c538e91f5d18c8d8e1c26e",
+      "recipe": "sha256-chain: block_i = SHA256(seed || uint64be(i)), seed='mac2win-chunk-v1', concatenated, truncated to size"
+    }
+  ],
+  "hello": {
+    "bytesHex": "68656c6c6f",
+    "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+  },
+  "emptyFileSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "chunkBoundaries": {
+    "chunkSize": 4194304,
+    "fileSize": 8388609,
+    "expectedChunkCount": 3,
+    "chunkSizes": [
+      4194304,
+      4194304,
+      1
+    ],
+    "note": "chunk i covers [i*chunkSize, min((i+1)*chunkSize, size)); last chunk may be short; size 0 => no chunks"
+  }
+}

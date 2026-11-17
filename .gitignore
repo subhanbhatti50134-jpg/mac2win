@@ -1,0 +1,38 @@
+# Build outputs
+bin/
+obj/
+[Bb]uild/
+out/
+dist/
+*.user
+*.suo
+.vs/
+.vscode/
+*.swp
+
+# Test artifacts
+TestResults/
+coverage/
+*.coverage
+artifacts/
+
+# Generated large data (never commit) — SPEC §10
+tools/data/
+*.m2wpart
+*.m2wstaging/
+
+# Signing material — never commit
+*.p12
+*.pfx
+*.cer
+*.key
+.env
+.env.*
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Inno Setup compiled output
+win-receiver/installer/Output/

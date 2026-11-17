@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mac2win.local/schema/pair-request.schema.json",
+  "title": "PairRequest",
+  "description": "pinProof = HMAC-SHA256(HKDF(PIN, salt=certFingerprintHex, info='mac2win-pair-v1'), clientNonce||'|'||serverNonce||'|'||devicePublicKey) with all three base64-encoded; see protocol/PROTOCOL.md §2.3.",
+  "type": "object",
+  "required": ["protocolVersion", "deviceName", "devicePublicKey", "clientNonce", "serverNonce", "pinProof"],
+  "additionalProperties": true,
+  "properties": {
+    "protocolVersion": { "type": "integer", "const": 1 },
+    "deviceName": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "devicePublicKey": { "type": "string", "contentEncoding": "base64", "description": "DER SubjectPublicKeyInfo, EC P-256." },
+    "clientNonce": { "type": "string", "contentEncoding": "base64", "minLength": 43, "maxLength": 44 },
+    "serverNonce": { "type": "string", "contentEncoding": "base64", "minLength": 43, "maxLength": 44 },
+    "pinProof": { "type": "string", "contentEncoding": "base64", "minLength": 43, "maxLength": 44 }
+  }
+}
