@@ -515,6 +515,10 @@ public final class ProtocolClient: NSObject, URLSessionDelegate {
     public struct ConfirmResult: Decodable {
         public let status: String
         public let chunkSize: Int
+        /// Effective per-path resolutions the receiver applied (protocol §2.8), merged
+        /// with the receiver's default conflict policy. Files resolved as SKIP MUST NOT
+        /// be uploaded. Optional: receivers predating the echo omit it.
+        public let conflictResolutions: [String: String]?
     }
 
     private struct ConfirmRequest: Encodable {

@@ -256,7 +256,17 @@ in batch order across all batches:
 ```
 
 Per-path policy ∈ `SKIP | REPLACE | RENAME | KEEP_BOTH`. Unlisted conflicts → `E_CONFLICT_UNRESOLVED`.
-Response: `{ "status": "TRANSFERRING", "chunkSize": 4194304 }` (server may pick ≤ requested size).
+
+`applyToAllDefault` is **optional**. When omitted, the receiver applies its configured default
+conflict policy (a receiver setting; factory default `ASK`, i.e. ask-the-sender, so omitting it
+alone still yields `E_CONFLICT_UNRESOLVED` on conflicts). When present, it overrides the
+receiver default for conflicts with no per-path entry.
+
+Response: `{ "status": "TRANSFERRING", "chunkSize": 4194304, "conflictResolutions": { … } }`
+(server may pick ≤ requested size). `conflictResolutions` in the response echoes the **effective**
+per-path resolutions the receiver applied (sender entries merged with the receiver default; empty
+when there were no conflicts). The sender MUST skip uploading files resolved as `SKIP` — the
+receiver rejects chunk uploads for them (`E_SESSION_STATE`).
 
 ### 2.9 `GET /v1/sessions/{id}/state` → 200 (resume)
 

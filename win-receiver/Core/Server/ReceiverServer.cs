@@ -628,9 +628,19 @@ public sealed class ReceiverServer : IAsyncDisposable
                     ?? throw new ProtocolException(ErrorCode.E_BAD_REQUEST, "resolution value missing");
         }
         var applyToAll = root.TryGetProperty("applyToAllDefault", out var at) ? at.GetString() : null;
+        // receiver-side default conflict policy (SPEC §8 settings): applied only when the
+        // sender omitted the field entirely; "ASK" preserves ask-the-sender behavior
+        applyToAll ??= Options.DefaultConflictPolicy;
 
-        session.Confirm(resolutions, applyToAll);
-        return Results.Ok(new { status = "TRANSFERRING", chunkSize = session.ChunkSize });
+        // the response echoes the effective resolutions so the sender knows exactly what
+        // the receiver applied (protocol §2.8) — it must not upload SKIPped files
+        var effective = session.Confirm(resolutions, applyToAll);
+        return Results.Ok(new
+        {
+            status = "TRANSFERRING",
+            chunkSize = session.ChunkSize,
+            conflictResolutions = effective,
+        });
     }
 
     private IResult HandleStateAsync(HttpContext ctx, string id)
@@ -762,6 +772,25 @@ public sealed class ReceiverServer : IAsyncDisposable
 
     /// <summary>Session status in wire form: AwaitingApproval → AWAITING_APPROVAL.</summary>
     public static string WireStatus(SessionStatus status) => TransferSession.WireStatus(status);
+
+    /// <summary>Live progress snapshot of every known session for the receiver UI (SPEC §8).</summary>
+    public IReadOnlyList<SessionInfo> GetSessionInfos() =>
+        _sessions.Values.Select(s => s.GetInfo()).OrderBy(i => i.CreatedAt).ToList();
+
+    /// <summary>
+    /// Report of a finished session (history export); null when the session is unknown or
+    /// still running. Terminal sessions stay recoverable across restarts within the TTL.
+    /// </summary>
+    public SessionReport? GetSessionReport(string id)
+    {
+        if (!_sessions.TryGetValue(id, out var session)) return null;
+        return session.Status switch
+        {
+            SessionStatus.Completed or SessionStatus.Cancelled or SessionStatus.Failed
+                or SessionStatus.Denied or SessionStatus.Expired => session.BuildReport(),
+            _ => null,
+        };
+    }
 
     public async ValueTask DisposeAsync()
     {

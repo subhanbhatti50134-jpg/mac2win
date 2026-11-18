@@ -56,7 +56,7 @@ jobs:
       - name: Vectors current + docs mirror in sync
         run: python3 tools/gen_vectors.py --check
       - name: Receiver core tests (cross-platform, ADR-002)
-        run: dotnet test win-receiver/WinReceiver.sln -c Release
+        run: dotnet test win-receiver/Core.Tests/Mac2WinReceiver.Core.Tests.csproj -c Release
       - name: Swift sender core build + tests (ADR-010)
         run: swift test --package-path mac-sender/Core
       # The real Swift↔.NET loopback test lives in the dedicated `cross-impl` job below
@@ -76,8 +76,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
-      - name: Build receiver (Release)
-        run: dotnet build win-receiver/WinReceiver.sln -c Release
+      - name: Build receiver host (Release)
+        run: dotnet build win-receiver/ReceiverHost/Mac2WinReceiver.Host.csproj -c Release
       - name: Start receiver (loopback, fixed PIN, auto-approve — test harness only)
         run: |
           LOG="$RUNNER_TEMP/receiver.log"
@@ -123,4 +123,4 @@ jobs:
       - name: Vectors current + docs mirror in sync
         run: python3 tools/gen_vectors.py --check
       - name: Receiver core tests (cross-platform, ADR-002)
-        run: dotnet test win-receiver/WinReceiver.sln -c Release
+        run: dotnet test win-receiver/Core.Tests/Mac2WinReceiver.Core.Tests.csproj -c Release

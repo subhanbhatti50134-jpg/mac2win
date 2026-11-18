@@ -780,7 +780,14 @@ public sealed class TransferSession : IDisposable
 
     // ------------------------------------------------------------------- confirm
 
-    public void Confirm(IReadOnlyDictionary<string, string> resolutions, string? applyToAllDefault)
+    /// <summary>
+    /// Applies conflict resolutions and starts the transfer. Returns the *effective*
+    /// per-path resolutions (sender entries plus receiver-side default fills, protocol
+    /// §2.8): the sender must skip uploading files resolved as SKIP, so it learns the
+    /// receiver's applied policy from this response rather than assuming its own.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Confirm(
+        IReadOnlyDictionary<string, string> resolutions, string? applyToAllDefault)
     {
         lock (_gate)
         {
@@ -789,7 +796,7 @@ public sealed class TransferSession : IDisposable
             if (Status is SessionStatus.Transferring or SessionStatus.Paused)
             {
                 PersistBestEffortLocked();
-                return;
+                return EffectiveResolutionsLocked();
             }
             if (Status != SessionStatus.PreflightReady)
                 throw new ProtocolException(ErrorCode.E_SESSION_STATE, $"session is {Status}");
@@ -860,7 +867,22 @@ public sealed class TransferSession : IDisposable
 
             Status = SessionStatus.Transferring;
             PersistLocked();
+            return EffectiveResolutionsLocked();
         }
+    }
+
+    /// <summary>
+    /// Effective per-path conflict resolutions for the confirm response (protocol §2.8):
+    /// only paths that were actually conflicted or renamed by a resolution — a sender's
+    /// stray per-path entry for a clean file is accepted but never echoed back as policy.
+    /// </summary>
+    private IReadOnlyDictionary<string, string> EffectiveResolutionsLocked()
+    {
+        var conflicted = Items.Where(i => i.Action is "CONFLICT" or "RENAME")
+            .Select(i => i.Path).ToHashSet(StringComparer.Ordinal);
+        return ConflictResolutions
+            .Where(kv => conflicted.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
     }
 
     private string NextFreeName(string relativePath)
@@ -901,6 +923,13 @@ public sealed class TransferSession : IDisposable
                 throw new ProtocolException(ErrorCode.E_SESSION_STATE, $"session is {Status}");
             if (!_byFileId.TryGetValue(fileId, out item!))
                 throw new ProtocolException(ErrorCode.E_SESSION_NOT_FOUND, $"unknown fileId {fileId}");
+
+            // skipped conflicts (protocol §2.8 echo): the sender must not upload these —
+            // reject at the first chunk instead of letting it stream bytes it can never
+            // commit; the item's terminal SKIPPED_BY_USER outcome is already recorded
+            if (item.Outcome == "SKIPPED_BY_USER")
+                throw new ProtocolException(ErrorCode.E_SESSION_STATE,
+                    $"file {fileId} was resolved as SKIP — do not upload it");
 
             expectedLen = Math.Min(ChunkSize, item.Size - (long)chunkIndex * ChunkSize);
             if (chunkIndex < 0 || item.Size == 0 || expectedLen <= 0 || expectedLen > ChunkSize)
@@ -985,6 +1014,12 @@ public sealed class TransferSession : IDisposable
         {
             if (!_byFileId.TryGetValue(fileId, out var item))
                 throw new ProtocolException(ErrorCode.E_SESSION_NOT_FOUND, $"unknown fileId {fileId}");
+
+            // protocol §2.8: resolved-as-SKIP files are never written (zero-size files
+            // reach commit without any chunk upload, so guard here too)
+            if (item.Outcome == "SKIPPED_BY_USER")
+                throw new ProtocolException(ErrorCode.E_SESSION_STATE,
+                    $"file {fileId} was resolved as SKIP — it is not transferred");
 
             // idempotent retry (M3 fault injection, SPEC §8): the commit response was lost
             // after the atomic rename — replaying the same commit must not rename twice
@@ -1113,6 +1148,47 @@ public sealed class TransferSession : IDisposable
     }
 
     // ------------------------------------------------------------- resume state
+
+    /// <summary>Progress snapshot for the receiver UI (SPEC §8): polled locally, never on the wire.</summary>
+    public SessionInfo GetInfo()
+    {
+        lock (_gate)
+        {
+            long bytesReceived = 0, bytesTotal = 0;
+            int filesCompleted = 0, filesTotal = 0;
+            if (Items.Count > 0)
+            {
+                foreach (var i in Items)
+                {
+                    if (i.Type != "file" || i.Action is not ("CREATE" or "RENAME" or "CONFLICT"))
+                        continue;
+                    // skipped conflicts are resolved decisions, not transfers in flight:
+                    // they would sit in the denominator forever and cap progress below 100%
+                    if (i.Outcome == "SKIPPED_BY_USER")
+                        continue;
+                    filesTotal++;
+                    bytesTotal += i.Size;
+                    if (i.Committed)
+                    {
+                        filesCompleted++;
+                        bytesReceived += i.Size;
+                    }
+                    else
+                    {
+                        bytesReceived += i.BytesReceived;
+                    }
+                }
+            }
+            else
+            {
+                // manifest not received yet: show the sender's probe totals (files only)
+                filesTotal = (int)Math.Clamp(Summary.FileCount, 0, int.MaxValue);
+                bytesTotal = Math.Max(0, Summary.TotalBytes);
+            }
+            return new SessionInfo(Id, WireStatus(Status), Summary, CreatedAt,
+                bytesReceived, bytesTotal, filesCompleted, filesTotal);
+        }
+    }
 
     public SessionStateResponse GetState(string? cursor)
     {
@@ -1401,6 +1477,15 @@ public sealed record SessionStateResponse(
 public sealed record CompletedFile(string Path, string FileSha256);
 
 public sealed record PartialFile(string Path, string FileId, IReadOnlyList<int> VerifiedChunks, int NextChunk);
+
+/// <summary>
+/// UI progress row for one session (receiver-app polling, SPEC §8). Not a wire type:
+/// BytesReceived counts committed bytes plus verified staged bytes, so progress moves
+/// only when data is actually durable on the receiver.
+/// </summary>
+public sealed record SessionInfo(
+    string Id, string Status, SessionSummary Summary, DateTimeOffset CreatedAt,
+    long BytesReceived, long BytesTotal, int FilesCompleted, int FilesTotal);
 
 public sealed record ReportTotals(
     long Items, long Verified, long Renamed, long Replaced, long Skipped, long Excluded,

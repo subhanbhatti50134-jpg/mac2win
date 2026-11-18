@@ -333,6 +333,21 @@ public sealed class ProtocolTestClient : IDisposable
         throw new TimeoutException("approval not granted in time");
     }
 
+    public async Task<string> AwaitDenialAsync(string sessionId, TimeSpan? timeout = null)
+    {
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(15));
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var (status, _) = await GetSessionAsync(sessionId);
+            if (status == "DENIED")
+                return status;
+            if (status == "MANIFEST_RECEIVING")
+                throw new InvalidOperationException("session was approved, not denied");
+            await Task.Delay(25);
+        }
+        throw new TimeoutException("session was not denied in time");
+    }
+
     public async Task<ApiResponse> SendManifestAsync(string sessionId, string token,
         IReadOnlyList<Entry> entries, bool final, string? digest = null, int batchIndex = 0)
     {
@@ -349,11 +364,14 @@ public sealed class ProtocolTestClient : IDisposable
     public async Task<ApiResponse> ConfirmAsync(string sessionId, string token,
         IReadOnlyDictionary<string, string>? resolutions = null, string? applyToAll = null)
     {
-        return await PostJsonAsync($"/v1/sessions/{sessionId}/confirm", new
+        // applyToAllDefault is omitted unless the caller sets it (protocol §2.8): the
+        // receiver then applies its configured default conflict policy
+        var payload = new Dictionary<string, object>
         {
-            conflictResolutions = resolutions ?? new Dictionary<string, string>(),
-            applyToAllDefault = applyToAll ?? "ASK",
-        }, token);
+            ["conflictResolutions"] = resolutions ?? new Dictionary<string, string>(),
+        };
+        if (applyToAll is not null) payload["applyToAllDefault"] = applyToAll;
+        return await PostJsonAsync($"/v1/sessions/{sessionId}/confirm", payload, token);
     }
 
     public async Task<ApiResponse> GetStateAsync(string sessionId, string token, string? cursor = null)

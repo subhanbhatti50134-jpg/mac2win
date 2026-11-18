@@ -137,8 +137,11 @@ warnings. ADR-017 records the persistence/chaos-proxy decisions.
 | Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` |
 | Sender (Swift) crash-resume, mtime re-check, hard-kill of sender | AUTOMATED | **NOT RUN** | Swift sender not runnable on Windows (ADR-010): `swift test --package-path mac-sender/Core` on macOS / `macos-latest` CI job |
 | Hard-kill of *sender* and receiver (SPEC §10 full wording) | AUTOMATED | **NOT RUN** | Receiver-side half is the two hard-kill tests above (SIMULATED sender: test client reconnects). Real sender kill needs the Swift app ⇒ macOS CI |
-| GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet |
-
+| UI-driven end-to-end transfer: Ready → pair → approve → transfer → progress → history → export → stop | AUTOMATED | PASSED | `SmokeTest.UiDrivenTransfer_EndToEnd` (real TLS, `ProtocolTestClient` as Mac, on-disk SHA-256 == source, JSON/CSV/HTML export) |
+| UI updates throttled ~15 Hz, never block UI thread | — | PASSED | `ReceiverViewModel` uses `DispatcherTimer` (67 ms ≈ 15 Hz); server callbacks marshal to UI thread via `Dispatcher`; no `await` in UI event handlers |
+| Windows receiver + App build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local, 2026-11-18) |
+| Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` (PROTOCOL.md §2.8 amended for optional `applyToAllDefault` + confirm response echo) |
+| GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet; `macos`/`linux`/`cross-impl` use project-scoped paths (WPF not on non-Windows), `windows` keeps the solution |
 ## M4–M7 (rows added as milestones start)
 
 See `docs/SPEC.md` §10 for the required coverage; each milestone adds its rows here before exit.
@@ -167,6 +170,7 @@ On macOS (human or CI):
 
 ```bash
 python3 tools/gen_vectors.py --check
-dotnet test win-receiver/WinReceiver.sln -c Release
+dotnet test win-receiver/Core.Tests/Mac2WinReceiver.Core.Tests.csproj -c Release
 swift test --package-path mac-sender/Core
 ```
+

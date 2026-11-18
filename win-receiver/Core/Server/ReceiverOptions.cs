@@ -73,6 +73,13 @@ public sealed class ReceiverOptions
     public TimeSpan ChallengeTtl { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// Receiver-side default conflict policy (SPEC §8 settings): applied only when the
+    /// sender's confirm body omits <c>applyToAllDefault</c>. One of
+    /// ASK (default — the sender must ask its user) | SKIP | REPLACE | RENAME | KEEP_BOTH.
+    /// </summary>
+    public string DefaultConflictPolicy { get; set; } = "ASK";
+
+    /// <summary>
     /// Override for the PIN lifetime (protocol §4: 5 minutes). Null keeps the protocol
     /// default. Test harnesses only (fault-injection suite) — the shipping UI never sets this.
     /// </summary>
