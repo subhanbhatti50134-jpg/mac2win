@@ -1,4 +1,5 @@
 using System.Security.Cryptography.X509Certificates;
+using Mac2WinReceiver.Core.Certs;
 using Mac2WinReceiver.Core.Server;
 using Xunit;
 
@@ -13,20 +14,23 @@ public sealed class TestEnv : IAsyncDisposable
     /// <summary>Fixed test PIN (harness only — production PINs are CSPRNG, single-use).</summary>
     public const string TestPin = "483920";
 
-    public ReceiverServer Server { get; }
+    public ReceiverServer Server { get; private set; }
     public string Root { get; }
     public string SourceDir { get; }
     public string DestinationDir { get; }
-    public Uri BaseUri { get; }
+    public Uri BaseUri => new($"https://127.0.0.1:{Server.Port}");
     public IDestinationInfo DestinationInfo { get; private set; } = null!;
 
-    private TestEnv(ReceiverServer server, string root, string source, string destination)
+    private readonly ReceiverOptions _options;
+
+    private TestEnv(ReceiverServer server, ReceiverOptions options, string root, string source,
+        string destination)
     {
         Server = server;
+        _options = options;
         Root = root;
         SourceDir = source;
         DestinationDir = destination;
-        BaseUri = new Uri($"https://127.0.0.1:{server.Port}");
     }
 
     public static async Task<TestEnv> StartAsync(
@@ -52,11 +56,27 @@ public sealed class TestEnv : IAsyncDisposable
             FreeSpaceMarginBytes = 0,
         };
         options = configure?.Invoke(options) ?? options;
+        // one certificate for the whole env: a restart must keep the pinned fingerprint
+        options.Certificate ??= CertificateProvider.CreateEphemeral();
 
         var server = await ReceiverServer.StartAsync(options);
-        var env = new TestEnv(server, root, source, destination);
+        var env = new TestEnv(server, options, root, source, destination);
         env.DestinationInfo = options.CreateDestinationInfo();
         return env;
+    }
+
+    /// <summary>
+    /// Simulates a hard kill of the receiver followed by a fresh start (M3 crash
+    /// consistency): every persist happens synchronously inside the operation path, so
+    /// tearing the server down without any extra flush leaves exactly the on-disk state a
+    /// kill -9 would. The new server binds a new ephemeral port over the same
+    /// destination/staging tree with the same certificate.
+    /// </summary>
+    public async Task RestartServerAsync()
+    {
+        await Server.DisposeAsync();
+        Server = await ReceiverServer.StartAsync(_options);
+        DestinationInfo = _options.CreateDestinationInfo();
     }
 
     /// <summary>Creates a client with the pinned server fingerprint (no accept-all path).</summary>
@@ -83,6 +103,7 @@ public sealed class TestEnv : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await Server.DisposeAsync();
+        _options.Certificate?.Dispose(); // env owns the cert (server never disposes it)
         try
         {
             if (Directory.Exists(Root))

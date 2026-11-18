@@ -107,7 +107,39 @@ All rows below are from `dotnet test win-receiver/WinReceiver.sln -c Release` on
 | Swift sender against M2 hardening (path policy parity on macOS) | AUTOMATED | **NOT RUN** | No Swift toolchain on Windows (ADR-010); `swift test --package-path mac-sender/Core` on macOS / `macos-latest` CI job |
 | GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet |
 
-## M3–M7 (rows added as milestones start)
+## M3 — Resilience (fault injection, crash consistency, idempotent retry)
+
+All rows below are from `dotnet test win-receiver/WinReceiver.sln -c Release` on this machine,
+2026-11-18: **103/103 passed** (82 M0–M2 + 16 fault-injection + 5 crash-window), 0 build
+warnings. ADR-017 records the persistence/chaos-proxy decisions.
+
+| Feature | Level | Status | Evidence |
+|---|---|---|---|
+| Drop mid-chunk: truncated body dies, retry on healthy connection verifies | AUTOMATED | PASSED | `FaultInjectionTests.TruncatedChunkUpload_ConnectionDropped_RetryVerifies` (`TruncatingContent` aborts after half a chunk; retry ⇒ `VERIFIED`, invariants hold) |
+| Drop mid-manifest: truncated batch is not half-applied, full batch then accepted | AUTOMATED | PASSED | `FaultInjectionTests.TruncatedManifestUpload_DropThenFullBatchAccepted` (two-phase parse: rejected entries/digest never mutate state) |
+| Drop mid-rename: commit response lost ⇒ replay idempotent, no double rename | AUTOMATED | PASSED | `FaultInjectionTests.CommitResponseLost_ReplayIsIdempotent_NoDoubleRename` (replay returns same `RENAMED`/`finalPath`; exactly one file at destination) |
+| Lost manifest/confirm responses: replayed requests idempotent, stale index still 409 | AUTOMATED | PASSED | `ManifestBatchReplayed_AfterLostResponse_IsIdempotent` (same fileIds, no duplicate items, `E_SESSION_STATE` for skipped-back index), `ConfirmReplayed_AfterLostResponse_IsIdempotent` |
+| Duplicate chunk ⇒ `ALREADY_VERIFIED`; out-of-order chunks verify in any order | AUTOMATED | PASSED | `DuplicateChunkUpload_IsIdempotent`, `OutOfOrderChunks_VerifyInAnyOrder` (delivery 2,0,3,1) |
+| Bit flips / corruption: boundary chunk re-hashed on recovery, mismatch distrusts it and above | AUTOMATED | PASSED | `RecoveryCrashWindowsTests.Recovery_BoundaryHashMismatch_DropsBoundaryAndAbove` (+ M2 `CorruptedChunkHash_IsRejected…` on the wire) |
+| Chaos proxy: sever mid-chunk over real TLS, retry completes | AUTOMATED | PASSED | `FaultInjectionTests.ChaosProxy_SeverMidChunk_RetryCompletes` (`ChaosProxy` sever-after-64 KiB; TLS passthrough, pinning unaffected) |
+| Latency + throttling: transfer still verifies | AUTOMATED | PASSED | `ChaosProxy_LatencyAndThrottling_TransferStillVerifies` (2 ms/buffer, 4 MiB/s cap, 1.5 MiB + 8 KiB files) |
+| Receiver disk full / destination failure at commit ⇒ 500 `E_DESTINATION_ERROR`, no partial at final path, ledger reconciles | AUTOMATED | PASSED | `DestinationRenameFails_NoPartialAtFinalPath_LedgerFails` (directory squats final path; item `FAILED`, `.m2wpart` absent). Preflight disk-full ⇒ 507 covered by M1 `InsufficientStorage_FailsConfirmWith507` (SIMULATED fake volume) |
+| Hard-kill receiver mid-transfer, restart, resume: same device (no re-pair), same session token (no re-approval), verified chunks not re-sent | AUTOMATED | PASSED | `HardKillReceiver_DuringTransfer_ResumeFromState_Completes` (`devices.json` + `session.json` + journal; state shows `a.txt` completed, `b.bin` `nextChunk 1`) |
+| Hard-kill receiver mid-manifest, restart, replayed batch accepted with same fileIds | AUTOMATED | PASSED | `HardKillReceiver_DuringManifest_ReplayedBatchAcceptedAfterRestart` |
+| Commit-intent crash windows: rename completed from journal; data-gone ⇒ terminal FAILED; unjournaled tail bytes never trusted; stale pre-`RESET` chunks dropped | AUTOMATED | PASSED | `RecoveryCrashWindowsTests.Recovery_CompletesRenameFromJournalIntent`, `…WhoseDataIsGone_FailsTerminally`, `…DistrustsUnjournaledTailBytes`, `…DistrustsStaleChunksAfterFileRestart` |
+| Simulated sleep/wake: connections drop inside idle window, wake resumes with progress intact | AUTOMATED | PASSED | `SleepWake_ReconnectWithinIdleWindow_ResumeWorks` (`IdleTimeout` 30 s, 1.2 s gap, `Reconnect` drops pooled sockets) |
+| Expired PIN ⇒ 403 `E_PIN_EXPIRED` even with the correct PIN | AUTOMATED | PASSED | `ExpiredPin_PairingRejected_EvenWithCorrectPin` (`PinMaxAge` 250 ms test-only knob; protocol default 5 min unchanged) |
+| PIN brute force: 5 failures ⇒ 429 `E_PIN_LOCKED`, backoff expires, correct PIN then pairs | AUTOMATED | PASSED | `PinLockoutBackoffExpires_ThenCorrectPinPairs` (+ M2 `FiveFailedAttempts_ThenE_PIN_LOCKED`) |
+| Replayed pairing (nonce replay/expiry) | AUTOMATED | PASSED | M2 `ReplayedServerNonce_IsRejected`, `ExpiredServerNonce_IsRejected` (unchanged, still green) |
+| Source mutation during transfer ⇒ `E_SOURCE_CHANGED` for already-verified chunk; original still verifies | AUTOMATED | PASSED | `SourceMutated_RejectedForAlreadyVerifiedChunk_OriginalStillVerifies` (+ M1 size-change test; sender-side mtime re-check is Swift ⇒ NOT RUN) |
+| Trusted devices + session tokens survive receiver restart (ADR-017) | AUTOMATED | PASSED | Both hard-kill tests: `ReauthenticateAsync` (hello with same EC key, no PIN) + `GetSessionAsync` returns identical session token after restart |
+| Windows receiver build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local, 2026-11-18) |
+| Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` |
+| Sender (Swift) crash-resume, mtime re-check, hard-kill of sender | AUTOMATED | **NOT RUN** | Swift sender not runnable on Windows (ADR-010): `swift test --package-path mac-sender/Core` on macOS / `macos-latest` CI job |
+| Hard-kill of *sender* and receiver (SPEC §10 full wording) | AUTOMATED | **NOT RUN** | Receiver-side half is the two hard-kill tests above (SIMULATED sender: test client reconnects). Real sender kill needs the Swift app ⇒ macOS CI |
+| GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet |
+
+## M4–M7 (rows added as milestones start)
 
 See `docs/SPEC.md` §10 for the required coverage; each milestone adds its rows here before exit.
 

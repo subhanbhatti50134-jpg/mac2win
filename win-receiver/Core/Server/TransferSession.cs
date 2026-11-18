@@ -73,7 +73,7 @@ public sealed class TransferSession : IDisposable
     private readonly Dictionary<string, ManifestItem> _byFileId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _reparseCheckCache = new(StringComparer.Ordinal);
 
-    public string Id { get; } = Guid.NewGuid().ToString();
+    public string Id { get; }
     /// <summary>Device that created this session (only it may poll/drive it).</summary>
     public string OwnerDeviceId { get; set; } = "";
     public SessionSummary Summary { get; }
@@ -88,6 +88,10 @@ public sealed class TransferSession : IDisposable
     public int BatchesReceived { get; private set; }
     public string? ManifestDigestHex { get; private set; }
     public Dictionary<string, string> ConflictResolutions { get; } = new(StringComparer.Ordinal);
+    /// <summary>Index into <see cref="Items"/> where the last accepted manifest batch started.</summary>
+    public int LastBatchItemStart { get; private set; } = -1;
+    /// <summary>Whether the last accepted manifest batch was the final one.</summary>
+    public bool LastBatchFinal { get; private set; }
 
     private long _plannedFileBytes; // bytes of files that will actually transfer
     private DateTimeOffset _lastActivity = DateTimeOffset.UtcNow; // idle clock (post-approval)
@@ -97,12 +101,336 @@ public sealed class TransferSession : IDisposable
         _options = options;
         _destination = destination;
         Summary = summary;
+        Id = Guid.NewGuid().ToString();
         ChunkSize = options.ChunkSize;
         StagingDir = Path.Combine(
             options.StagingRoot ?? Path.Combine(options.DestinationRoot, ".mac2win-staging"),
             Id);
         Directory.CreateDirectory(StagingDir);
         Journal = new Journal(Path.Combine(StagingDir, "journal.log"));
+    }
+
+    /// <summary>Recovery constructor: rebuilds in-memory state from a persisted snapshot.</summary>
+    private TransferSession(ReceiverOptions options, IDestinationInfo destination, SessionSnapshot snap)
+    {
+        _options = options;
+        _destination = destination;
+        Id = snap.SessionId;
+        Summary = new SessionSummary(snap.SessionId, snap.SourceDeviceName, snap.FileCount,
+            snap.DirCount, snap.SymlinkCount, snap.TotalBytes, snap.RemoteIp);
+        ChunkSize = snap.ChunkSize > 0 ? snap.ChunkSize : options.ChunkSize;
+        StagingDir = Path.Combine(
+            options.StagingRoot ?? Path.Combine(options.DestinationRoot, ".mac2win-staging"),
+            Id);
+        Status = Enum.TryParse<SessionStatus>(snap.Status, out var status)
+            ? status : SessionStatus.Failed;
+        SessionToken = snap.SessionToken;
+        CreatedAt = DateTimeOffset.FromUnixTimeMilliseconds(snap.CreatedAtMs);
+        ApprovedAt = snap.ApprovedAtMs is { } approved
+            ? DateTimeOffset.FromUnixTimeMilliseconds(approved) : null;
+        _lastActivity = snap.LastActivityMs > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(snap.LastActivityMs)
+            : DateTimeOffset.UtcNow;
+        OwnerDeviceId = snap.OwnerDeviceId;
+        BatchesReceived = snap.BatchesReceived;
+        ManifestDigestHex = snap.ManifestDigest;
+        _plannedFileBytes = snap.PlannedFileBytes;
+        LastBatchItemStart = snap.LastBatchItemStart;
+        LastBatchFinal = snap.LastBatchFinal;
+        foreach (var kv in snap.ConflictResolutions)
+            ConflictResolutions[kv.Key] = kv.Value;
+
+        foreach (var i in snap.Items)
+        {
+            var item = new ManifestItem
+            {
+                Path = i.Path, Type = i.Type, Size = i.Size, MtimeUtcNs = i.MtimeUtcNs,
+                CtimeUtcNs = i.CtimeUtcNs, Mode = i.Mode, SymlinkTarget = i.SymlinkTarget,
+                SenderState = i.SenderState, FileId = i.FileId, Action = i.Action,
+                FinalRelativePath = i.FinalRelativePath, PlanReason = i.PlanReason,
+                OverwriteAllowed = i.OverwriteAllowed, Committed = i.Committed,
+                FileSha256 = i.FileSha256, Outcome = i.Outcome, OutcomeReason = i.OutcomeReason,
+                OutcomeErrorCode = i.OutcomeErrorCode,
+            };
+            Items.Add(item);
+            if (item.FileId is not null) _byFileId[item.FileId] = item;
+        }
+
+        // terminal sessions whose staging was purged record nothing further; anything else
+        // (or a staging directory that still exists) keeps its write-ahead journal
+        var terminal = Status is SessionStatus.Completed or SessionStatus.Failed
+            or SessionStatus.Cancelled or SessionStatus.Denied or SessionStatus.Expired;
+        Journal = !terminal || Directory.Exists(StagingDir)
+            ? new Journal(Path.Combine(StagingDir, "journal.log"))
+            : Journal.Detached();
+    }
+
+    /// <summary>
+    /// Rebuilds a session after a receiver restart (M3 crash consistency, SPEC §5): merges
+    /// the persisted snapshot with the write-ahead journal and reconciles crash windows —
+    /// commit intents whose rename did not finish are completed (or failed) and chunk
+    /// records are re-validated so unjournaled bytes are never trusted.
+    /// </summary>
+    public static TransferSession Recover(ReceiverOptions options, IDestinationInfo destination,
+        SessionSnapshot snap)
+    {
+        var session = new TransferSession(options, destination, snap);
+        session.ReplayJournal();
+        return session;
+    }
+
+    private void ReplayJournal()
+    {
+        JournalSnapshot snap;
+        try
+        {
+            snap = Journal.Replay(Path.Combine(StagingDir, "journal.log"));
+        }
+        catch (IOException)
+        {
+            return; // unreadable journal: keep the snapshot state; sender resumes from there
+        }
+
+        lock (_gate)
+        {
+            // 1. FILE records are write-ahead intents for the atomic rename: finish or fail them
+            foreach (var (fileId, sha, relPath) in snap.Files)
+                ReconcileCommitIntentLocked(fileId, sha, relPath);
+
+            // 2. CHUNK records: trust only bytes that are actually on disk, re-hashing the boundary
+            foreach (var group in snap.Chunks.GroupBy(c => c.FileId, StringComparer.Ordinal))
+                RecoverChunksLocked(group.Key, group.ToList());
+        }
+    }
+
+    /// <summary>Completes (or fails) a journaled commit whose rename may not have run yet.</summary>
+    private void ReconcileCommitIntentLocked(string fileId, string sha, string finalRel)
+    {
+        if (!_byFileId.TryGetValue(fileId, out var item)) return; // orphan intent: ignore
+        if (item.Committed) return;
+
+        string finalAbs;
+        try
+        {
+            finalAbs = DestinationFullPath(finalRel);
+        }
+        catch (ProtocolException)
+        {
+            MarkRecoveryFailed(item, "committed path resolves outside the destination");
+            return;
+        }
+
+        var staged = StagedPath(fileId);
+        try
+        {
+            if (File.Exists(finalAbs) &&
+                string.Equals(HashFile(finalAbs), sha, StringComparison.OrdinalIgnoreCase))
+            {
+                // the rename finished before the crash
+                if (File.Exists(staged)) File.Delete(staged);
+            }
+            else if (File.Exists(staged) &&
+                     string.Equals(HashFile(staged), sha, StringComparison.OrdinalIgnoreCase))
+            {
+                // the rename had not run yet: complete it from the write-ahead intent
+                Directory.CreateDirectory(Path.GetDirectoryName(finalAbs)!);
+                if (File.Exists(finalAbs) && !item.OverwriteAllowed)
+                {
+                    // conflict appeared after planning: deterministic free name, never overwrite
+                    finalRel = NextFreeName(finalRel);
+                    finalAbs = DestinationFullPath(finalRel);
+                }
+                File.Move(staged, finalAbs, overwrite: item.OverwriteAllowed);
+            }
+            else
+            {
+                MarkRecoveryFailed(item, "committed file data unavailable after restart");
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or ArgumentException or NotSupportedException)
+        {
+            MarkRecoveryFailed(item, "could not complete atomic rename: " + ex.Message);
+            return;
+        }
+
+        item.Committed = true;
+        item.FileSha256 = sha;
+        item.FinalRelativePath = finalRel;
+        // same rule as the live commit path (existed-before is unknowable after a crash,
+        // so REPLACE-resolution files are reported REPLACED — cosmetic, both verify)
+        item.Outcome = !string.Equals(finalRel, item.Path, StringComparison.Ordinal) ? "RENAMED"
+            : item.OverwriteAllowed ? "REPLACED" : "VERIFIED";
+        item.OutcomeReason ??= item.Action == "RENAME" ? item.PlanReason : null;
+    }
+
+    private static void MarkRecoveryFailed(ManifestItem item, string reason)
+    {
+        item.Committed = false;
+        item.Outcome = "FAILED";
+        item.OutcomeErrorCode = ErrorCode.E_DESTINATION_ERROR.ToString();
+        item.OutcomeReason = reason;
+    }
+
+    /// <summary>
+    /// Rebuilds chunk trust for one file from its journal records: coverage check (bytes
+    /// present on disk), then the SPEC §5 boundary re-hash. Unjournaled bytes — a crash
+    /// between the data flush and the journal append — are never trusted.
+    /// </summary>
+    private void RecoverChunksLocked(string fileId,
+        List<(string FileId, int ChunkIndex, string Sha256Hex)> records)
+    {
+        if (!_byFileId.TryGetValue(fileId, out var item)) return;
+        item.VerifiedChunks.Clear();
+        item.ChunkHashes.Clear();
+        item.BytesReceived = 0;
+        if (item.Committed) return; // committed state comes from the FILE record, not chunks
+
+        long length;
+        try
+        {
+            var staged = StagedPath(fileId);
+            length = File.Exists(staged) ? new FileInfo(staged).Length : -1;
+        }
+        catch (IOException)
+        {
+            length = -1;
+        }
+        if (length < 0) return; // staged data gone: sender restarts this file from chunk 0
+
+        // last record per index wins (records after a RESET supersede stale pre-restart ones;
+        // Replay already dropped pre-RESET records entirely)
+        var byIndex = new SortedDictionary<int, string>();
+        foreach (var r in records)
+        {
+            var remaining = item.Size - (long)r.ChunkIndex * ChunkSize;
+            if (r.ChunkIndex < 0 || remaining <= 0) continue; // out of range for this size
+            byIndex[r.ChunkIndex] = r.Sha256Hex;
+        }
+
+        var trusted = new SortedSet<int>();
+        foreach (var (idx, _) in byIndex)
+        {
+            var end = (long)idx * ChunkSize + Math.Min(ChunkSize, item.Size - (long)idx * ChunkSize);
+            if (end <= length) trusted.Add(idx); // journaled but truncated away ⇒ distrusted
+        }
+
+        // boundary re-validation (SPEC §5): re-hash the chunk below the resume point; on
+        // mismatch distrust it and everything above (source may have changed under it)
+        var boundary = -1;
+        while (trusted.Contains(boundary + 1)) boundary++;
+        if (boundary >= 0 && !ValidateChunkOnDisk(item, fileId, boundary, byIndex[boundary]))
+            trusted.RemoveWhere(i => i >= boundary);
+
+        foreach (var idx in trusted)
+        {
+            item.VerifiedChunks.Add(idx);
+            item.ChunkHashes[idx] = byIndex[idx];
+            item.BytesReceived += Math.Min(ChunkSize, item.Size - (long)idx * ChunkSize);
+        }
+    }
+
+    private bool ValidateChunkOnDisk(ManifestItem item, string fileId, int idx, string expectedSha)
+    {
+        try
+        {
+            var offset = (long)idx * ChunkSize;
+            var len = Math.Min(ChunkSize, item.Size - offset);
+            using var fs = new FileStream(StagedPath(fileId), FileMode.Open, FileAccess.Read,
+                FileShare.Read, 4096, FileOptions.SequentialScan);
+            fs.Seek(offset, SeekOrigin.Begin);
+            var buf = ArrayPool<byte>.Shared.Rent((int)len);
+            try
+            {
+                var read = 0;
+                while (read < len)
+                {
+                    var n = fs.Read(buf, read, (int)len - read);
+                    if (n == 0) break;
+                    read += n;
+                }
+                if (read != len) return false;
+                var actual = Convert.ToHexString(
+                    SHA256.HashData(buf.AsSpan(0, read))).ToLowerInvariant();
+                return string.Equals(actual, expectedSha, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf);
+            }
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    // -------------------------------------------------------------- persistence
+
+    /// <summary>Writes the durable session snapshot. Throws E_DESTINATION_ERROR when the
+    /// state volume cannot be written (the sender may retry the operation).</summary>
+    private void PersistLocked()
+    {
+        try
+        {
+            ToSnapshot().Save(SessionSnapshot.MetadataPath(
+                Path.GetDirectoryName(StagingDir)!, Id));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ProtocolException(ErrorCode.E_DESTINATION_ERROR,
+                "could not persist session state: " + ex.Message);
+        }
+    }
+
+    /// <summary>Same as <see cref="PersistLocked"/> but never fails the operation (expiry/denial).</summary>
+    private void PersistBestEffortLocked()
+    {
+        try { PersistLocked(); }
+        catch (ProtocolException) { /* state already decided; restart falls back to the journal */ }
+    }
+
+    /// <summary>Server hook: persist the initial snapshot when the session is created.</summary>
+    public void Persist()
+    {
+        lock (_gate) PersistLocked();
+    }
+
+    private SessionSnapshot ToSnapshot()
+    {
+        // called under _gate by every persist site
+        return new SessionSnapshot
+        {
+            SessionId = Id,
+            OwnerDeviceId = OwnerDeviceId,
+            Status = Status.ToString(),
+            SessionToken = SessionToken,
+            CreatedAtMs = CreatedAt.ToUnixTimeMilliseconds(),
+            ApprovedAtMs = ApprovedAt?.ToUnixTimeMilliseconds(),
+            LastActivityMs = _lastActivity.ToUnixTimeMilliseconds(),
+            ChunkSize = ChunkSize,
+            SourceDeviceName = Summary.SourceDeviceName,
+            FileCount = Summary.FileCount,
+            DirCount = Summary.DirCount,
+            SymlinkCount = Summary.SymlinkCount,
+            TotalBytes = Summary.TotalBytes,
+            RemoteIp = Summary.RemoteIp,
+            BatchesReceived = BatchesReceived,
+            ManifestDigest = ManifestDigestHex,
+            PlannedFileBytes = _plannedFileBytes,
+            LastBatchItemStart = LastBatchItemStart,
+            LastBatchFinal = LastBatchFinal,
+            ConflictResolutions = new Dictionary<string, string>(ConflictResolutions, StringComparer.Ordinal),
+            Items = Items.Select(i => new ItemSnapshot
+            {
+                Path = i.Path, Type = i.Type, Size = i.Size, MtimeUtcNs = i.MtimeUtcNs,
+                CtimeUtcNs = i.CtimeUtcNs, Mode = i.Mode, SymlinkTarget = i.SymlinkTarget,
+                SenderState = i.SenderState, FileId = i.FileId, Action = i.Action,
+                FinalRelativePath = i.FinalRelativePath, PlanReason = i.PlanReason,
+                OverwriteAllowed = i.OverwriteAllowed, Committed = i.Committed,
+                FileSha256 = i.FileSha256, Outcome = i.Outcome, OutcomeReason = i.OutcomeReason,
+                OutcomeErrorCode = i.OutcomeErrorCode,
+            }).ToList(),
+        };
     }
 
     public void MarkApproved(string sessionToken)
@@ -115,10 +443,18 @@ public sealed class TransferSession : IDisposable
             SessionToken = sessionToken;
             ApprovedAt = DateTimeOffset.UtcNow;
             _lastActivity = ApprovedAt.Value;
+            PersistLocked();
         }
     }
 
-    public void MarkDenied() => SetStatus(SessionStatus.Denied);
+    public void MarkDenied()
+    {
+        lock (_gate)
+        {
+            Status = SessionStatus.Denied;
+            PersistBestEffortLocked();
+        }
+    }
 
     /// <summary>Records protocol activity so the idle clock restarts (SPEC §7 idle timeouts).</summary>
     public void Touch()
@@ -148,13 +484,9 @@ public sealed class TransferSession : IDisposable
             if (!ttlExceeded && !idleExceeded) return;
 
             Status = SessionStatus.Expired;
+            PersistBestEffortLocked(); // metadata first: purge must not lose the expiry itself
             PurgeStaging();
         }
-    }
-
-    private void SetStatus(SessionStatus next)
-    {
-        lock (_gate) Status = next;
     }
 
     private void RequireStatus(params SessionStatus[] allowed)
@@ -174,6 +506,12 @@ public sealed class TransferSession : IDisposable
     {
         lock (_gate)
         {
+            // idempotent retry (M3 fault injection, SPEC §8): the response to the last
+            // accepted batch was lost — rebuild it from state instead of failing the replay
+            if (BatchesReceived > 0 && batchIndex == BatchesReceived - 1 &&
+                LastBatchItemStart >= 0 && final == LastBatchFinal)
+                return RebuildBatchResponseLocked();
+
             if (Status != SessionStatus.ManifestReceiving)
                 throw new ProtocolException(ErrorCode.E_SESSION_STATE, $"session is {Status}");
             if (batchIndex != BatchesReceived)
@@ -185,11 +523,28 @@ public sealed class TransferSession : IDisposable
             if (final && string.IsNullOrEmpty(manifestDigestHex))
                 throw new ProtocolException(ErrorCode.E_BAD_REQUEST, "final batch requires manifestDigest");
 
-            var planned = new List<PlannedItem>();
+            // two-phase: parse everything before mutating state, so a rejected entry or a
+            // digest mismatch leaves the session exactly as it was (the sender may retry)
+            var parsed = new List<ManifestItem>(entries.Count);
             foreach (var el in entries)
             {
                 ct.ThrowIfCancellationRequested();
-                var item = ParseAndPlanEntry(el);
+                parsed.Add(ParseAndPlanEntry(el));
+            }
+
+            if (final)
+            {
+                var computed = ManifestDigest.ComputeHex(Items.Concat(parsed).Select(
+                    i => new ManifestDigest.Entry(i.Path, i.Type, i.Size, i.MtimeUtcNs, i.Mode)));
+                if (!string.Equals(computed, manifestDigestHex, StringComparison.Ordinal))
+                    throw new ProtocolException(ErrorCode.E_BAD_REQUEST, "manifestDigest mismatch");
+                ManifestDigestHex = computed;
+            }
+
+            var start = Items.Count;
+            var planned = new List<PlannedItem>(parsed.Count);
+            foreach (var item in parsed)
+            {
                 Items.Add(item);
                 if (item.Type == "file" && item.Action is "CREATE" or "RENAME" or "CONFLICT")
                 {
@@ -200,23 +555,41 @@ public sealed class TransferSession : IDisposable
                 planned.Add(new PlannedItem(
                     item.Path, item.FileId, item.Action, item.FinalRelativePath, item.PlanReason));
             }
+            LastBatchItemStart = start;
+            LastBatchFinal = final;
             BatchesReceived++;
+
+            if (final)
+            {
+                ApplyCaseCollisionRenames();
+                Status = SessionStatus.PreflightReady;
+            }
+            PersistLocked();
 
             if (!final)
                 return new ManifestBatchResponse("MANIFEST_RECEIVING", planned, null, true);
-
-            var computed = ManifestDigest.ComputeHex(Items.Select(i => new ManifestDigest.Entry(
-                i.Path, i.Type, i.Size, i.MtimeUtcNs, i.Mode)));
-            if (!string.Equals(computed, manifestDigestHex, StringComparison.Ordinal))
-                throw new ProtocolException(ErrorCode.E_BAD_REQUEST, "manifestDigest mismatch");
-            ManifestDigestHex = computed;
-
-            ApplyCaseCollisionRenames();
-            var preflight = BuildPreflight();
-            Status = SessionStatus.PreflightReady;
-            return new ManifestBatchResponse("PREFLIGHT_READY", planned, preflight, true);
+            return new ManifestBatchResponse("PREFLIGHT_READY", planned, BuildPreflight(), true);
         }
     }
+
+    /// <summary>Rebuilds the response for a re-sent batch that was already accepted.</summary>
+    private ManifestBatchResponse RebuildBatchResponseLocked()
+    {
+        var planned = Items.Skip(LastBatchItemStart)
+            .Select(i => new PlannedItem(i.Path, i.FileId, i.Action, i.FinalRelativePath, i.PlanReason))
+            .ToList();
+        if (Status == SessionStatus.PreflightReady && LastBatchFinal)
+            return new ManifestBatchResponse("PREFLIGHT_READY", planned, BuildPreflight(), true);
+        if (Status == SessionStatus.ManifestReceiving)
+            return new ManifestBatchResponse("MANIFEST_RECEIVING", planned, null, true);
+        // sender already moved past this batch; ack the current state
+        return new ManifestBatchResponse(WireStatus(Status), planned, null, true);
+    }
+
+    /// <summary>Session status in wire form: AwaitingApproval → AWAITING_APPROVAL.</summary>
+    public static string WireStatus(SessionStatus status) =>
+        System.Text.RegularExpressions.Regex.Replace(
+            status.ToString(), "([a-z0-9])([A-Z])", "$1_$2").ToUpperInvariant();
 
     private ManifestItem ParseAndPlanEntry(JsonElement el)
     {
@@ -411,6 +784,13 @@ public sealed class TransferSession : IDisposable
     {
         lock (_gate)
         {
+            // idempotent retry (M3): the confirm response was lost — names are already
+            // fixed and the session is already in flight, so re-confirming is a no-op
+            if (Status is SessionStatus.Transferring or SessionStatus.Paused)
+            {
+                PersistBestEffortLocked();
+                return;
+            }
             if (Status != SessionStatus.PreflightReady)
                 throw new ProtocolException(ErrorCode.E_SESSION_STATE, $"session is {Status}");
 
@@ -479,6 +859,7 @@ public sealed class TransferSession : IDisposable
             }
 
             Status = SessionStatus.Transferring;
+            PersistLocked();
         }
     }
 
@@ -570,6 +951,7 @@ public sealed class TransferSession : IDisposable
 
                 // persist: write at offset, flush to disk, THEN journal (write-ahead order)
                 var stagedPath = StagedPath(fileId);
+                Directory.CreateDirectory(StagingDir); // recovered session whose staging vanished
                 using (var fs = new FileStream(stagedPath, FileMode.OpenOrCreate, FileAccess.Write,
                            FileShare.None, 4096, FileOptions.WriteThrough))
                 {
@@ -601,12 +983,22 @@ public sealed class TransferSession : IDisposable
     {
         lock (_gate)
         {
-            if (Status != SessionStatus.Transferring)
-                throw new ProtocolException(ErrorCode.E_SESSION_STATE, $"session is {Status}");
             if (!_byFileId.TryGetValue(fileId, out var item))
                 throw new ProtocolException(ErrorCode.E_SESSION_NOT_FOUND, $"unknown fileId {fileId}");
+
+            // idempotent retry (M3 fault injection, SPEC §8): the commit response was lost
+            // after the atomic rename — replaying the same commit must not rename twice
             if (item.Committed)
-                throw new ProtocolException(ErrorCode.E_SESSION_STATE, "file already committed");
+            {
+                if (string.Equals(item.FileSha256, fileSha256Hex, StringComparison.OrdinalIgnoreCase))
+                    return new CommitResponse(item.Outcome,
+                        DestinationFullPath(item.FinalRelativePath!));
+                throw new ProtocolException(ErrorCode.E_SOURCE_CHANGED,
+                    "file already committed with different content");
+            }
+
+            if (Status != SessionStatus.Transferring)
+                throw new ProtocolException(ErrorCode.E_SESSION_STATE, $"session is {Status}");
 
             var expectedChunks = item.Size == 0 ? 0 : (int)((item.Size + ChunkSize - 1) / ChunkSize);
             if (item.VerifiedChunks.Count < expectedChunks)
@@ -702,15 +1094,15 @@ public sealed class TransferSession : IDisposable
 
     private void ResetFileForRestart(ManifestItem item, string fileId)
     {
+        // journal first: from here on, earlier CHUNK records for this file are stale
+        // (M3 crash-recovery replay drops everything before the latest RESET)
+        Journal.RecordReset(fileId);
         item.VerifiedChunks.Clear();
         item.ChunkHashes.Clear();
         item.BytesReceived = 0;
         item.StreamingHash?.GetHashAndReset(); // discard; resets for a full restart
         var staged = StagedPath(fileId);
         if (File.Exists(staged)) File.Delete(staged);
-        // Journal lines for this file remain, but in-memory state is authoritative while the
-        // session is live. M3's crash-recovery replay must treat CHUNK lines of a restarted
-        // file as stale (replay re-validates boundary chunk hashes on resume, SPEC §5).
     }
 
     private static string HashFile(string path)
@@ -770,9 +1162,12 @@ public sealed class TransferSession : IDisposable
     {
         lock (_gate)
         {
+            if (Status == to) { PersistBestEffortLocked(); return; } // idempotent replay
             if (Status != from)
-                throw new ProtocolException(ErrorCode.E_SESSION_STATE, $"session is {Status}, expected {from}");
+                throw new ProtocolException(ErrorCode.E_SESSION_STATE,
+                    $"session is {Status}, expected {from}");
             Status = to;
+            PersistLocked();
         }
     }
 
@@ -780,9 +1175,16 @@ public sealed class TransferSession : IDisposable
     {
         lock (_gate)
         {
-            Status = SessionStatus.Cancelled;
-            // verified files stay in place; incomplete staging is deleted (SPEC §5)
-            PurgeStaging();
+            if (Status != SessionStatus.Cancelled)
+            {
+                Status = SessionStatus.Cancelled;
+                var report = BuildReportLocked(); // terminal outcomes land in the snapshot
+                PersistLocked();
+                // verified files stay in place; incomplete staging is deleted (SPEC §5)
+                PurgeStaging();
+                return report;
+            }
+            PurgeStaging(); // replayed cancel: make sure the purge happened
             return BuildReportLocked();
         }
     }
@@ -791,11 +1193,18 @@ public sealed class TransferSession : IDisposable
     {
         lock (_gate)
         {
+            if (Status == SessionStatus.Completed)
+            {
+                PurgeStaging(); // replayed complete: make sure the purge happened
+                return BuildReportLocked();
+            }
             if (Status != SessionStatus.Transferring && Status != SessionStatus.Paused)
                 throw new ProtocolException(ErrorCode.E_SESSION_STATE, $"session is {Status}");
             Status = SessionStatus.Completed;
+            var report = BuildReportLocked(); // terminal outcomes land in the snapshot
+            PersistLocked();
             PurgeStaging();
-            return BuildReportLocked();
+            return report;
         }
     }
 

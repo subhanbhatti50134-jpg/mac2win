@@ -12,17 +12,19 @@ public sealed class PinVault
 {
     private readonly object _gate = new();
     private readonly bool _fixedMode; // dev/test harness (--pin): no rotation, documented as test-only
+    private readonly TimeSpan _maxAge; // null ⇒ protocol default (5 min); tests shorten it
     private string _pin;
     private DateTimeOffset _issuedAt;
     private int _failures;
     private int _lockLevel;
     private DateTimeOffset _lockedUntil;
 
-    public PinVault(string? fixedPin = null)
+    public PinVault(string? fixedPin = null, TimeSpan? maxAge = null)
     {
         _fixedMode = fixedPin is not null;
         _pin = fixedPin ?? Generate();
         _issuedAt = DateTimeOffset.UtcNow;
+        _maxAge = maxAge ?? TimeSpan.FromSeconds(ProtocolConstants.PinMaxAgeSeconds);
     }
 
     public static string Generate()
@@ -59,7 +61,7 @@ public sealed class PinVault
             if (_lockedUntil > now)
                 return new VerifyOutcome(false, PinFailure.Locked, _lockedUntil - now);
 
-            var expired = now - _issuedAt > TimeSpan.FromSeconds(ProtocolConstants.PinMaxAgeSeconds);
+            var expired = now - _issuedAt > _maxAge;
             if (expired)
             {
                 Rotate();

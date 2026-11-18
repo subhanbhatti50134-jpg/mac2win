@@ -32,7 +32,7 @@ public sealed record Entry(
 public sealed class ProtocolTestClient : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    private readonly HttpClient _http;
+    private HttpClient _http;
     private ECDsa? _deviceKey;
 
     public string PinnedFingerprint { get; }
@@ -43,6 +43,11 @@ public sealed class ProtocolTestClient : IDisposable
     public ProtocolTestClient(Uri baseUri, string pinnedFingerprint)
     {
         PinnedFingerprint = pinnedFingerprint.ToLowerInvariant();
+        _http = BuildClient(baseUri);
+    }
+
+    private HttpClient BuildClient(Uri baseUri)
+    {
         var handler = new HttpClientHandler();
         handler.ServerCertificateCustomValidationCallback = (_, cert, _, _) =>
         {
@@ -50,11 +55,22 @@ public sealed class ProtocolTestClient : IDisposable
             var actual = Convert.ToHexString(SHA256.HashData(cert.RawData)).ToLowerInvariant();
             return string.Equals(actual, PinnedFingerprint, StringComparison.Ordinal);
         };
-        _http = new HttpClient(handler)
+        return new HttpClient(handler)
         {
             BaseAddress = baseUri,
             Timeout = TimeSpan.FromMinutes(10),
         };
+    }
+
+    /// <summary>
+    /// Drops every live connection and points the client at a new base URI while keeping
+    /// the device identity — the receiver-side model of a sender waking from sleep or a
+    /// client reconnecting after a receiver restart (M3 fault injection).
+    /// </summary>
+    public void Reconnect(Uri baseUri)
+    {
+        _http.Dispose();
+        _http = BuildClient(baseUri);
     }
 
     // ------------------------------------------------------------- raw requests
@@ -87,6 +103,21 @@ public sealed class ProtocolTestClient : IDisposable
         return await ToApiResponse(resp);
     }
 
+    /// <summary>
+    /// POST whose body dies after <paramref name="bytesBeforeAbort"/> bytes: the server
+    /// sees a truncated request and a dropped connection (M3 fault injection).
+    /// </summary>
+    public async Task<ApiResponse> PostJsonTruncatedAsync(string path, string json,
+        string? bearer, int bytesBeforeAbort)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, path);
+        if (bearer is not null) req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + bearer);
+        req.Content = new TruncatingContent(Encoding.UTF8.GetBytes(json), bytesBeforeAbort,
+            "application/json");
+        using var resp = await _http.SendAsync(req);
+        return await ToApiResponse(resp);
+    }
+
     public async Task<ApiResponse> PutChunkAsync(string path, ReadOnlyMemory<byte> body,
         string sha256Hex, string bearer)
     {
@@ -98,6 +129,53 @@ public sealed class ProtocolTestClient : IDisposable
         req.Content = content;
         using var resp = await _http.SendAsync(req);
         return await ToApiResponse(resp);
+    }
+
+    /// <summary>
+    /// Chunk PUT whose body dies after <paramref name="bytesBeforeAbort"/> bytes: models a
+    /// connection loss mid-chunk (M3 fault injection). The caller treats any failure —
+    /// exception or non-2xx — as the drop, then retries on a healthy connection.
+    /// </summary>
+    public async Task<ApiResponse> PutChunkTruncatedAsync(string path, ReadOnlyMemory<byte> body,
+        string sha256Hex, string bearer, int bytesBeforeAbort)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Put, path);
+        req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + bearer);
+        req.Headers.TryAddWithoutValidation("X-Chunk-Sha256", sha256Hex);
+        var content = new TruncatingContent(body.ToArray(), bytesBeforeAbort,
+            "application/octet-stream");
+        req.Content = content;
+        using var resp = await _http.SendAsync(req);
+        return await ToApiResponse(resp);
+    }
+
+    /// <summary>Content that writes a prefix then aborts the request (simulated connection loss).</summary>
+    private sealed class TruncatingContent : HttpContent
+    {
+        private readonly byte[] _bytes;
+        private readonly int _limit;
+
+        public TruncatingContent(byte[] bytes, int limit, string mediaType)
+        {
+            _bytes = bytes;
+            _limit = Math.Max(0, Math.Min(limit, bytes.Length));
+            Headers.TryAddWithoutValidation("Content-Type", mediaType);
+        }
+
+        protected override async Task SerializeToStreamAsync(Stream stream,
+            System.Net.TransportContext? context)
+        {
+            await stream.WriteAsync(_bytes.AsMemory(0, _limit));
+            await stream.FlushAsync();
+            if (_limit < _bytes.Length)
+                throw new IOException("simulated connection loss mid-body");
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = _bytes.Length;
+            return true; // fixed Content-Length so the server sees a truncated body, not a short one
+        }
     }
 
     private static async Task<ApiResponse> ToApiResponse(HttpResponseMessage resp)
@@ -186,6 +264,16 @@ public sealed class ProtocolTestClient : IDisposable
         if (!hello.IsSuccess)
             throw new InvalidOperationException($"hello failed: {hello.Status} {hello.ErrorCode} {hello.ErrorMessage}");
         return hello.Body.GetProperty("deviceToken").GetString()!;
+    }
+
+    /// <summary>
+    /// Re-runs the hello handshake after a receiver restart (device tokens are in-memory)
+    /// and stores the fresh device token under the same device identity — no re-pairing.
+    /// </summary>
+    public async Task<string> ReauthenticateAsync()
+    {
+        DeviceToken = await HelloAsync();
+        return DeviceToken;
     }
 
     /// <summary>Raw hello response (tamper tests assert on the failure without exceptions).</summary>

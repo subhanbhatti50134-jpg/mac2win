@@ -44,6 +44,18 @@ public sealed class TokenVault
         }
     }
 
+    /// <summary>
+    /// Re-registers a previously issued token after a receiver restart (M3 crash recovery),
+    /// so a sender that stored the token can resume its session without re-pairing.
+    /// </summary>
+    public void Restore(string value, string scope, string ownerId, TimeSpan ttl)
+    {
+        lock (_gate)
+        {
+            _tokens[value] = new Entry(value, DateTimeOffset.UtcNow + ttl, scope, ownerId);
+        }
+    }
+
     public void RevokeOwner(string ownerId)
     {
         lock (_gate)

@@ -29,6 +29,8 @@ public sealed class ReceiverServer : IAsyncDisposable
     private readonly TokenVault _sessionTokens = new();
     private readonly AuthRateLimiter _authLimiter;
     private readonly X509Certificate2 _certificate;
+    private readonly bool _ownsCertificate; // caller-supplied certs belong to the caller
+    private string _stagingRoot = "";
 
     public ReceiverOptions Options { get; }
     public PinVault Pins { get; }
@@ -40,14 +42,17 @@ public sealed class ReceiverServer : IAsyncDisposable
 
     private sealed record DeviceRecord(string DeviceId, byte[] PublicKeyDer, string DeviceName, DateTimeOffset PairedAt);
 
-    private ReceiverServer(WebApplication app, ReceiverOptions options, X509Certificate2 cert)
+    private ReceiverServer(WebApplication app, ReceiverOptions options, X509Certificate2 cert,
+        bool ownsCertificate, string stagingRoot)
     {
         _app = app;
         Options = options;
         _certificate = cert;
+        _ownsCertificate = ownsCertificate;
+        _stagingRoot = stagingRoot;
         Port = options.Port;
         CertFingerprint = CertificateProvider.FingerprintSha256(cert);
-        Pins = new PinVault(options.FixedTestPin);
+        Pins = new PinVault(options.FixedTestPin, options.PinMaxAge);
         _authLimiter = new AuthRateLimiter(options.AuthRateLimit, options.AuthRateWindow);
     }
 
@@ -67,6 +72,7 @@ public sealed class ReceiverServer : IAsyncDisposable
     {
         foreach (var kv in _devices.Where(kv => kv.Value.DeviceId == deviceId))
             _devices.TryRemove(kv.Key, out _);
+        SaveDevices();
         _deviceTokens.RevokeOwner(deviceId);
         foreach (var session in _sessions.Values.Where(s =>
                      string.Equals(s.OwnerDeviceId, deviceId, StringComparison.Ordinal)))
@@ -82,7 +88,12 @@ public sealed class ReceiverServer : IAsyncDisposable
         if (!Directory.Exists(options.DestinationRoot))
             Directory.CreateDirectory(options.DestinationRoot);
 
+        var ownsCert = options.Certificate is null;
         var cert = options.Certificate ?? CertificateProvider.CreateEphemeral();
+
+        var stagingRoot = options.StagingRoot
+            ?? Path.Combine(options.DestinationRoot, ".mac2win-staging");
+        Directory.CreateDirectory(stagingRoot);
 
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.ConfigureHttpJsonOptions(o =>
@@ -98,7 +109,9 @@ public sealed class ReceiverServer : IAsyncDisposable
         });
 
         var app = builder.Build();
-        var server = new ReceiverServer(app, options, cert);
+        var server = new ReceiverServer(app, options, cert, ownsCert, stagingRoot);
+        server.LoadDevices();
+        server.RecoverSessions();
         server.MapEndpoints(app);
 
         await app.StartAsync(ct);
@@ -110,6 +123,116 @@ public sealed class ReceiverServer : IAsyncDisposable
             : options.Port;
 
         return server;
+    }
+
+    // -------------------------------------------------------- state persistence
+
+    private void LoadDevices()
+    {
+        foreach (var d in DeviceStore.Load(SessionSnapshot.DevicesPath(_stagingRoot)).Devices)
+        {
+            try
+            {
+                var der = Convert.FromBase64String(d.PublicKeyDerBase64);
+                var keyId = Convert.ToHexString(SHA256.HashData(der)).ToLowerInvariant();
+                _devices[keyId] = new DeviceRecord(d.DeviceId, der, d.DeviceName,
+                    DateTimeOffset.FromUnixTimeMilliseconds(d.PairedAtMs));
+            }
+            catch (FormatException)
+            {
+                /* corrupt record: drop it; the device simply re-pairs */
+            }
+        }
+    }
+
+    private void SaveDevices()
+    {
+        var store = new DeviceStore();
+        foreach (var kv in _devices)
+        {
+            store.Devices.Add(new StoredDevice
+            {
+                KeyId = kv.Key,
+                DeviceId = kv.Value.DeviceId,
+                PublicKeyDerBase64 = Convert.ToBase64String(kv.Value.PublicKeyDer),
+                DeviceName = kv.Value.DeviceName,
+                PairedAtMs = kv.Value.PairedAt.ToUnixTimeMilliseconds(),
+            });
+        }
+        store.Save(SessionSnapshot.DevicesPath(_stagingRoot));
+    }
+
+    /// <summary>
+    /// Restores sessions persisted before a restart (SPEC §5: sessions survive app
+    /// restarts). Each snapshot is merged with its write-ahead journal; metadata that is
+    /// corrupt is skipped rather than crashing startup, and sessions whose TTL ran out
+    /// while the receiver was down are cleaned up.
+    /// </summary>
+    private void RecoverSessions()
+    {
+        foreach (var path in Directory.GetFiles(_stagingRoot, "*.session.json"))
+        {
+            var snap = SessionSnapshot.Load(path);
+            if (snap is null || string.IsNullOrEmpty(snap.SessionId)) continue;
+            if (_sessions.ContainsKey(snap.SessionId)) continue;
+
+            TransferSession session;
+            try
+            {
+                session = TransferSession.Recover(Options, Options.CreateDestinationInfo(), snap);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                or InvalidOperationException or ArgumentException or ProtocolException)
+            {
+                continue; // unusable snapshot: skip, never block startup
+            }
+
+            // terminal sessions that outlived the TTL lose their metadata entirely
+            var terminal = session.Status is SessionStatus.Completed or SessionStatus.Failed
+                or SessionStatus.Cancelled or SessionStatus.Denied or SessionStatus.Expired;
+            if (terminal && DateTimeOffset.UtcNow - session.CreatedAt > Options.SessionTtl)
+            {
+                try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                session.Dispose();
+                continue;
+            }
+
+            if (session.SessionToken is not null)
+                _sessionTokens.Restore(session.SessionToken, "session", session.Id, Options.SessionTtl);
+            _sessions[session.Id] = session;
+
+            session.ExpireIfDue(); // TTL/idle may have passed while the receiver was down
+            if (session.Status == SessionStatus.AwaitingApproval)
+                StartApproval(session);
+        }
+    }
+
+    /// <summary>Spawns the approval flow (SPEC §4): no handler wired ⇒ deny (never accept).</summary>
+    private void StartApproval(TransferSession session)
+    {
+        var handler = Options.ApprovalHandler;
+        if (handler is null)
+        {
+            session.MarkDenied(); // no handler wired ⇒ never accept (SPEC §7)
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            try
+            {
+                var decision = await handler(session.Summary, timeout.Token);
+                if (decision.Approved)
+                    session.MarkApproved(_sessionTokens.Issue("session", session.Id, Options.SessionTtl));
+                else
+                    session.MarkDenied();
+            }
+            catch
+            {
+                session.MarkDenied();
+            }
+        }, CancellationToken.None);
     }
 
     // ---------------------------------------------------------------- endpoints
@@ -364,6 +487,7 @@ public sealed class ReceiverServer : IAsyncDisposable
             ? existing.DeviceId
             : Guid.NewGuid().ToString();
         _devices[keyId] = new DeviceRecord(deviceId, pubkeyDer, deviceName, DateTimeOffset.UtcNow);
+        SaveDevices(); // trusted devices survive restarts (SPEC §4)
 
         return Results.Ok(new
         {
@@ -432,31 +556,8 @@ public sealed class ReceiverServer : IAsyncDisposable
             summaryProbe with { SessionId = Guid.NewGuid().ToString() });
         session.OwnerDeviceId = deviceId;
         _sessions[session.Id] = session;
-
-        var handler = Options.ApprovalHandler;
-        if (handler is null)
-        {
-            session.MarkDenied(); // no handler wired ⇒ never accept (SPEC §7)
-        }
-        else
-        {
-            _ = Task.Run(async () =>
-            {
-                using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-                try
-                {
-                    var decision = await handler(session.Summary, timeout.Token);
-                    if (decision.Approved)
-                        session.MarkApproved(_sessionTokens.Issue("session", session.Id, Options.SessionTtl));
-                    else
-                        session.MarkDenied();
-                }
-                catch
-                {
-                    session.MarkDenied();
-                }
-            }, CancellationToken.None);
-        }
+        session.Persist(); // durable before the approval flow may transition it
+        StartApproval(session);
 
         return Results.Accepted($"/v1/sessions/{session.Id}",
             new { sessionId = session.Id, status = "AWAITING_APPROVAL" });
@@ -660,8 +761,7 @@ public sealed class ReceiverServer : IAsyncDisposable
     private TransferSession RequireSession(HttpContext ctx, string id) => GetSessionScoped(ctx, id);
 
     /// <summary>Session status in wire form: AwaitingApproval → AWAITING_APPROVAL.</summary>
-    public static string WireStatus(SessionStatus status) =>
-        Regex.Replace(status.ToString(), "([a-z0-9])([A-Z])", "$1_$2").ToUpperInvariant();
+    public static string WireStatus(SessionStatus status) => TransferSession.WireStatus(status);
 
     public async ValueTask DisposeAsync()
     {
@@ -669,7 +769,7 @@ public sealed class ReceiverServer : IAsyncDisposable
         {
             try { s.Dispose(); } catch { /* best effort */ }
         }
-        _certificate.Dispose();
+        if (_ownsCertificate) _certificate.Dispose(); // else the caller still holds it
         await _app.DisposeAsync();
     }
 }

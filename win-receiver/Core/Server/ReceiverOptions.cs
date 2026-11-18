@@ -73,6 +73,12 @@ public sealed class ReceiverOptions
     public TimeSpan ChallengeTtl { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// Override for the PIN lifetime (protocol §4: 5 minutes). Null keeps the protocol
+    /// default. Test harnesses only (fault-injection suite) — the shipping UI never sets this.
+    /// </summary>
+    public TimeSpan? PinMaxAge { get; set; }
+
+    /// <summary>
     /// Pending auth nonces held before oldest-first eviction (SPEC §7: anonymous health/
     /// challenge floods must not grow memory without bound).
     /// </summary>

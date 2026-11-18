@@ -11,11 +11,13 @@ namespace Mac2WinReceiver.Core.Server;
 /// Line format (ASCII, one record per line):
 ///   CHUNK &lt;fileId&gt; &lt;chunkIndex&gt; &lt;sha256hex&gt;
 ///   FILE  &lt;fileId&gt; &lt;sha256hex&gt; &lt;base64(destination-relative final path)&gt;
+///   RESET &lt;fileId&gt;   (marks every earlier CHUNK record for that file stale — the file
+///                      was restarted after a source change, SPEC §5)
 /// </summary>
 public sealed class Journal : IDisposable
 {
     private readonly object _gate = new();
-    private readonly FileStream _stream;
+    private readonly FileStream? _stream;
 
     public string Path { get; }
 
@@ -28,10 +30,23 @@ public sealed class Journal : IDisposable
             bufferSize: 4096, FileOptions.None);
     }
 
+    private Journal(FileStream? stream, string path)
+    {
+        Path = path;
+        _stream = stream;
+    }
+
+    /// <summary>
+    /// A journal that records nothing: used for sessions recovered after their staging
+    /// directory was purged (terminal sessions accept no further writes anyway).
+    /// </summary>
+    public static Journal Detached() => new((FileStream?)null, "");
+
     public void RecordChunk(string fileId, int chunkIndex, string sha256Hex)
     {
         lock (_gate)
         {
+            if (_stream is null) return;
             var line = $"CHUNK {fileId} {chunkIndex} {sha256Hex}\n";
             _stream.Write(Encoding.ASCII.GetBytes(line));
             _stream.Flush(flushToDisk: true);
@@ -42,6 +57,7 @@ public sealed class Journal : IDisposable
     {
         lock (_gate)
         {
+            if (_stream is null) return;
             var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(destinationRelativePath));
             var line = $"FILE {fileId} {sha256Hex} {b64}\n";
             _stream.Write(Encoding.ASCII.GetBytes(line));
@@ -49,12 +65,31 @@ public sealed class Journal : IDisposable
         }
     }
 
-    /// <summary>Plays the journal back (M3 crash-recovery tests). Returns plain records.</summary>
+    /// <summary>Marks all earlier CHUNK records for <paramref name="fileId"/> stale (file restart).</summary>
+    public void RecordReset(string fileId)
+    {
+        lock (_gate)
+        {
+            if (_stream is null) return;
+            var line = $"RESET {fileId}\n";
+            _stream.Write(Encoding.ASCII.GetBytes(line));
+            _stream.Flush(flushToDisk: true);
+        }
+    }
+
+    /// <summary>
+    /// Plays the journal back (M3 crash recovery). Returns plain records; CHUNK records
+    /// before the latest RESET of their file are dropped (a restarted file's old chunk
+    /// hashes are stale — SPEC §5 restart semantics).
+    /// </summary>
     public static JournalSnapshot Replay(string path)
     {
         var snap = new JournalSnapshot();
         if (!File.Exists(path)) return snap;
-        foreach (var raw in File.ReadLines(path))
+        // FileShare.ReadWrite: recovery may replay while the live journal handle is open
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(fs, Encoding.ASCII);
+        while (reader.ReadLine() is { } raw)
         {
             var parts = raw.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length == 0) continue;
@@ -72,6 +107,9 @@ public sealed class Journal : IDisposable
                     }
                     catch (FormatException) { /* corrupt line: ignore, chunk-level data still trusted */ }
                     break;
+                case "RESET" when parts.Length >= 2:
+                    snap.Chunks.RemoveAll(c => string.Equals(c.FileId, parts[1], StringComparison.Ordinal));
+                    break;
             }
         }
         return snap;
@@ -79,7 +117,7 @@ public sealed class Journal : IDisposable
 
     public void Dispose()
     {
-        lock (_gate) _stream.Dispose();
+        lock (_gate) _stream?.Dispose();
     }
 }
 
