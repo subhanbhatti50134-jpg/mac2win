@@ -185,7 +185,7 @@ Installer packaging prepared (actual builds require tooling not on this workstat
 | Windows self-contained publish (win-x64) incl. `Mac2WinReceiver.App.exe` | AUTOMATED | PASSED | `dotnet publish win-receiver/App -c Release -r win-x64 --self-contained` → 407 files, exe present |
 | Inno Setup installer script (`Mac2WinReceiver.iss`, ADR-004) references publish output | — | PASSED | `win-receiver/installer/Mac2WinReceiver.iss` |
 | Windows publish + installer build script (`publish-windows.ps1`) | — | PASSED | `win-receiver/installer/publish-windows.ps1` |
-| Windows `.exe` installer build (Inno Setup `iscc`) | REAL-DEVICE | **NOT RUN** | `iscc` not installed on this workstation |
+| Windows `.exe` installer build (Inno Setup `iscc`) | AUTOMATED | PASSED | `iscc win-receiver/installer/Mac2WinReceiver.iss` → `win-receiver/installer/Output/Mac2WinReceiver-Setup-0.1.0.exe` (59 MB) |
 | Windows installer code-signing (signtool) | REAL-DEVICE | **NOT RUN** | no code-signing cert |
 | macOS packaging skeleton: Info.plist, Entitlements.plist, build_dmg.sh | — | PASSED | `mac-sender/App/{Info.plist,Entitlements.plist,build_dmg.sh}` |
 | macOS SwiftUI app sources + `Mac2WinSender` executable target | — | PASSED | `mac-sender/App/Sources/Mac2WinSender/`, Package.swift target added |
