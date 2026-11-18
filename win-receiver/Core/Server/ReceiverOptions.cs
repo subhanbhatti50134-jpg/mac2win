@@ -60,8 +60,46 @@ public sealed class ReceiverOptions
     /// <summary>Free-space safety margin required at confirm time (bytes).</summary>
     public long FreeSpaceMarginBytes { get; set; } = 64 * 1024 * 1024;
 
-    /// <summary>Idle timeout for in-session requests (protocol E_IDLE_TIMEOUT).</summary>
-    public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
+    /// <summary>
+    /// Idle timeout for approved, non-terminal sessions: no protocol activity within this
+    /// window expires the session (E_SESSION_EXPIRED) and purges its staging (SPEC §5
+    /// resume-after-sleep ⇒ default is generous; SPEC §7 requires the limit to exist).
+    /// Pre-approval sessions are bounded by <see cref="SessionTtl"/> and the 5-minute
+    /// approval-dialog timeout instead. Set to <see cref="TimeSpan.Zero"/> to disable.
+    /// </summary>
+    public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromDays(7);
+
+    /// <summary>Auth-challenge lifetime (protocol §2.2 serverNonce TTL; default 5 min).</summary>
+    public TimeSpan ChallengeTtl { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Pending auth nonces held before oldest-first eviction (SPEC §7: anonymous health/
+    /// challenge floods must not grow memory without bound).
+    /// </summary>
+    public int MaxPendingChallenges { get; set; } = ProtocolConstants.MaxPendingChallenges;
+
+    /// <summary>
+    /// Sliding-window cap on unauthenticated auth requests per client IP
+    /// (challenge/pair/hello). 0 or negative disables the limiter (SPEC §7 connection
+    /// and rate limits).
+    /// </summary>
+    public int AuthRateLimit { get; set; } = 60;
+
+    /// <summary>Sliding window for <see cref="AuthRateLimit"/>.</summary>
+    public TimeSpan AuthRateWindow { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>No-progress timeout for reading a request body: a client that stalls mid-body is
+    /// answered with E_IDLE_TIMEOUT instead of holding a connection forever (SPEC §7
+    /// "endless streams"). Zero disables.
+    /// </summary>
+    public TimeSpan BodyStallTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Directories the destination must never be (inside) — Windows, Program Files,
+    /// Program Data (SPEC §6.2). Null ⇒ <see cref="DestinationGuard.SystemRoots"/>.
+    /// Tests inject synthetic roots.
+    /// </summary>
+    public IReadOnlyList<string>? ProtectedDestinationRoots { get; set; }
 
     /// <summary>
     /// Injection point for destination volume facts (tests substitute fake FAT32/low-disk

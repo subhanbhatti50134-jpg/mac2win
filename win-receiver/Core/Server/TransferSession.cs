@@ -90,6 +90,7 @@ public sealed class TransferSession : IDisposable
     public Dictionary<string, string> ConflictResolutions { get; } = new(StringComparer.Ordinal);
 
     private long _plannedFileBytes; // bytes of files that will actually transfer
+    private DateTimeOffset _lastActivity = DateTimeOffset.UtcNow; // idle clock (post-approval)
 
     public TransferSession(ReceiverOptions options, IDestinationInfo destination, SessionSummary summary)
     {
@@ -113,19 +114,41 @@ public sealed class TransferSession : IDisposable
             Status = SessionStatus.ManifestReceiving;
             SessionToken = sessionToken;
             ApprovedAt = DateTimeOffset.UtcNow;
+            _lastActivity = ApprovedAt.Value;
         }
     }
 
     public void MarkDenied() => SetStatus(SessionStatus.Denied);
 
+    /// <summary>Records protocol activity so the idle clock restarts (SPEC §7 idle timeouts).</summary>
+    public void Touch()
+    {
+        lock (_gate) _lastActivity = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>
+    /// Expires the session when it is past <see cref="ReceiverOptions.SessionTtl"/> (from
+    /// creation) or, for approved sessions, past <see cref="ReceiverOptions.IdleTimeout"/>
+    /// of inactivity; expiry is terminal and purges staging (SPEC §5: "expiry is
+    /// configurable, with staging cleanup"; verified files at final paths stay in place).
+    /// </summary>
     public void ExpireIfDue()
     {
         lock (_gate)
         {
             var terminal = Status is SessionStatus.Completed or SessionStatus.Failed
                 or SessionStatus.Cancelled or SessionStatus.Denied or SessionStatus.Expired;
-            if (!terminal && DateTimeOffset.UtcNow - CreatedAt > _options.SessionTtl)
-                Status = SessionStatus.Expired;
+            if (terminal) return;
+
+            var now = DateTimeOffset.UtcNow;
+            var ttlExceeded = now - CreatedAt > _options.SessionTtl;
+            var idleExceeded = ApprovedAt is not null
+                && _options.IdleTimeout > TimeSpan.Zero
+                && now - _lastActivity > _options.IdleTimeout;
+            if (!ttlExceeded && !idleExceeded) return;
+
+            Status = SessionStatus.Expired;
+            PurgeStaging();
         }
     }
 
@@ -271,15 +294,28 @@ public sealed class TransferSession : IDisposable
             item.PlanReason = "SANITIZED";
         }
 
-        // 5. destination conflicts (files only; resolutions applied at confirm)
-        if (type == "file")
+        // 5. canonicalization containment (defense in depth) + destination conflicts
+        string abs;
+        try
         {
-            var abs = DestinationFullPath(sanitizedPath);
-            if (File.Exists(abs) || Directory.Exists(abs))
-            {
-                item.Action = "CONFLICT";
-                item.PlanReason = "EXISTS";
-            }
+            abs = DestinationFullPath(sanitizedPath);
+        }
+        catch (Exception ex) when (ex is ProtocolException { Code: ErrorCode.E_PATH_REJECTED }
+            or ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            // canonicalized outside the destination ⇒ ledger as FAILED, never write
+            item.Action = "REJECTED";
+            item.PlanReason = "OUTSIDE_DESTINATION";
+            item.Outcome = "FAILED";
+            item.OutcomeErrorCode = ErrorCode.E_PATH_REJECTED.ToString();
+            item.OutcomeReason = "OUTSIDE_DESTINATION";
+            return item;
+        }
+
+        if (type == "file" && (File.Exists(abs) || Directory.Exists(abs)))
+        {
+            item.Action = "CONFLICT";
+            item.PlanReason = "EXISTS";
         }
 
         return item;
@@ -474,7 +510,7 @@ public sealed class TransferSession : IDisposable
     // ------------------------------------------------------------------- chunks
 
     public async Task<ChunkPutResponse> PutChunkAsync(string fileId, int chunkIndex, Stream body,
-        string? declaredSha256, CancellationToken ct)
+        string? declaredSha256, CancellationToken ct, long? declaredContentLength = null)
     {
         ManifestItem item;
         long expectedLen;
@@ -489,6 +525,12 @@ public sealed class TransferSession : IDisposable
             if (chunkIndex < 0 || item.Size == 0 || expectedLen <= 0 || expectedLen > ChunkSize)
                 throw new ProtocolException(ErrorCode.E_BAD_REQUEST,
                     $"chunk {chunkIndex} out of range for size {item.Size}");
+
+            // declared body size must match the chunk exactly — a longer/shorter stream is
+            // hostile or broken input (SPEC §7 endless streams), reject before reading
+            if (declaredContentLength is { } contentLength && contentLength != expectedLen)
+                throw new ProtocolException(ErrorCode.E_BAD_REQUEST,
+                    $"Content-Length {contentLength} != expected chunk length {expectedLen}");
 
             if (item.VerifiedChunks.Contains(chunkIndex))
             {

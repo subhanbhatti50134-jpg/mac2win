@@ -81,6 +81,11 @@ Canonical JSON Schemas (draft 2020-12) live in `protocol/schema/`. Summary below
 { "serverNonce": "base64(32 random bytes)", "expiresIn": 300 }
 ```
 
+`serverNonce` values are single-use and expire after `expiresIn` seconds; a missing,
+replayed, or expired nonce fails with `E_BAD_REQUEST`. The auth endpoints
+(`challenge`/`pair`/`hello`) are rate-limited per client IP (default 60 requests per 10 s
+sliding window) and fail with `E_RATE_LIMITED` when exceeded (SPEC §7).
+
 ### 2.3 `POST /v1/pair` → 200
 
 Request:
@@ -194,7 +199,7 @@ Request:
 }
 ```
 
-- `path`: **relative, NFC-normalized**, `/` separators, no leading `/`, no `.`/`..` segments (sender-normalized; receiver re-validates and may reject with `E_PATH_REJECTED`).
+- `path`: **relative, NFC-normalized**, `/` separators, no leading `/`, no `.`/`..` segments, at most 64 segments (sender-normalized; receiver re-validates and may reject with `E_PATH_REJECTED`).
 - `mode`: POSIX, informational only.
 - Batches: ≤ 1000 entries or ≤ 1 MiB JSON per batch, whichever first. `batchIndex` is 0-based, contiguous.
 - On `final: true` the request includes `"manifestDigest": "<hex sha256, canonical form §2.7.1>"`.
@@ -406,8 +411,8 @@ Error body (all non-2xx):
 | `E_SESSION_EXPIRED` | 410 | Session past expiry/TTL | new session | The session expired. Start the transfer again. |
 | `E_SESSION_STATE` | 409 | Wrong state for this call | after state change | The transfer is paused or busy — resume and retry. |
 | `E_MANIFEST_TOO_LARGE` | 413 | Over manifest caps | no | Too many items in one request. |
-| `E_LIMIT_EXCEEDED` | 413 | Resource cap hit (depth/bytes/entries) | no | This transfer exceeds a receiver limit. |
-| `E_PATH_REJECTED` | 400 | Unsafe path (traversal/drive/UNC/ADS/control) | no | An item path was rejected as unsafe. |
+| `E_LIMIT_EXCEEDED` | 413 | Resource cap hit (bytes/entries) | no | This transfer exceeds a receiver limit. |
+| `E_PATH_REJECTED` | 400 | Unsafe path (traversal/drive/UNC/ADS/control/depth) | no | An item path was rejected as unsafe. |
 | `E_CONFLICT_UNRESOLVED` | 409 | Confirm without resolutions | no | Choose what to do with existing files. |
 | `E_CHUNK_HASH_MISMATCH` | 422 | Chunk bytes ≠ declared hash | yes | A corrupted chunk was retried. |
 | `E_FILE_HASH_MISMATCH` | 422 | Final verify failed | no (restart file) | A file failed verification and was restarted. |

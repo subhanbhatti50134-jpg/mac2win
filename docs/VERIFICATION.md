@@ -62,7 +62,52 @@ All rows below are from `dotnet test win-receiver/WinReceiver.sln -c Release` on
 | Cross-implementation test (Swift ↔ .NET, loopback, real TLS) | AUTOMATED | **NOT RUN** | `CrossImplTransferTests.testEndToEndTransferVerifiesAgainstDotNetReceiver`: full flow (pin → pair → hello → 2-batch manifest → confirm → chunk PUTs → commit → complete) with on-disk/source-identity/ledger invariants; harness `ReceiverHost --auto-approve --pin`; job `cross-impl` added to ci.yml. Not runnable locally (ADR-010, no macOS toolchain); no remote → CI **NOT RUN** |
 | GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet |
 
-## M2–M7 (rows added as milestones start)
+## M2 — Security (pairing hardening, threat model, unauthorized/malicious clients)
+
+All rows below are from `dotnet test win-receiver/WinReceiver.sln -c Release` on this machine,
+2026-11-18: **82/82 passed** (40 M0+M1 + 42 M2), 0 build warnings. Threat model:
+`docs/SECURITY.md` (T1–T10, written before the hardening work per SPEC §7); ADRs 015–016.
+
+| Feature | Level | Status | Evidence |
+|---|---|---|---|
+| Threat model written (assets, boundaries, T1–T10 with tests + residual risk) | — | PASSED | `docs/SECURITY.md`; every mitigation cites an AUTOMATED test below |
+| Tampered `pinProof` ⇒ 403 `E_PIN_INVALID` (T2) | AUTOMATED | PASSED | `MaliciousClientTests.TamperedPinProof_IsRejected` |
+| Tampered hello signature ⇒ 401 `E_UNAUTHORIZED` (T2) | AUTOMATED | PASSED | `MaliciousClientTests.TamperedHelloSignature_IsUnauthorized` |
+| Replayed server nonce ⇒ 400 (single-use, T5) | AUTOMATED | PASSED | `MaliciousClientTests.ReplayedServerNonce_IsRejected` |
+| Expired server nonce ⇒ 400 `E_BAD_REQUEST` (T5) | AUTOMATED | PASSED | `MaliciousClientTests.ExpiredServerNonce_IsRejected` (`ChallengeTtl` 250 ms) |
+| Unknown deviceId ⇒ 403 `E_NOT_PAIRED` | AUTOMATED | PASSED | `MaliciousClientTests.UnknownDeviceId_GetsE_NOT_PAIRED` |
+| Wrong `protocolVersion` ⇒ 400 `E_UNSUPPORTED_VERSION` | AUTOMATED | PASSED | `MaliciousClientTests.WrongProtocolVersion_IsRejected` |
+| Cross-session token use ⇒ 401 `E_UNAUTHORIZED` (T5) | AUTOMATED | PASSED | `MaliciousClientTests.CrossSessionToken_IsRejected` |
+| Manifest >1000 entries ⇒ 413 `E_MANIFEST_TOO_LARGE`, batch not consumed | AUTOMATED | PASSED | `MaliciousClientTests.ManifestWith1001Entries_IsRejected` |
+| Manifest body >1 MiB ⇒ 413 `E_MANIFEST_TOO_LARGE` (T4) | AUTOMATED | PASSED | `MaliciousClientTests.OversizedManifestBody_IsRejected` |
+| Control body >1 MiB ⇒ 413 `E_LIMIT_EXCEEDED` (T4) | AUTOMATED | PASSED | `MaliciousClientTests.OversizedControlBody_IsRejected` |
+| Garbage JSON ⇒ 400; missing required field ⇒ 400 "missing required JSON field" | AUTOMATED | PASSED | `MaliciousClientTests.GarbageOrIncompleteJson_IsBadRequest` |
+| Control-char path ⇒ ledgered `REJECTED`/`CONTROL_CHARACTER`, sibling unaffected | AUTOMATED | PASSED | `MaliciousClientTests.ControlCharacterPath_IsLedgeredRejected` |
+| Reserved device names (`CON.txt`, `com1/…`) ⇒ deterministic `RENAME` | AUTOMATED | PASSED | `MaliciousClientTests.ReservedDeviceName_IsSanitizedDeterministically` (`CON_.txt`, `com1_/data.bin`) |
+| 70-segment path ⇒ ledgered `REJECTED`/`PATH_TOO_DEEP` (64-segment legal depth still transfers) | AUTOMATED | PASSED | `MaliciousClientTests.PathBeyondDepthLimit_IsLedgeredRejected` |
+| Backslash traversal `..\..\evil.dll` ⇒ sanitized `.._.._evil.dll`, lands inside destination only (T4) | AUTOMATED | PASSED | `MaliciousClientTests.BackslashTraversal_IsSanitizedAndLandsInsideDestination` (commit `RENAMED`, hash matches, no escape above/below destination) |
+| Negative / out-of-range chunk index ⇒ 400 `E_BAD_REQUEST` | AUTOMATED | PASSED | `MaliciousClientTests.NegativeAndOutOfRangeChunkIndex_AreBadRequests` |
+| Unknown fileId commit ⇒ 404 `E_SESSION_NOT_FOUND` | AUTOMATED | PASSED | `MaliciousClientTests.UnknownFileId_Commit_Is404` |
+| Chunk body length ≠ declared ⇒ 400 before reading, nothing persisted (T7) | AUTOMATED | PASSED | `MaliciousClientTests.ChunkBodyLengthMismatch_IsRejected` |
+| Auth burst ⇒ 429 `E_RATE_LIMITED`, retryable (T6) | AUTOMATED | PASSED | `MaliciousClientTests.AuthBurst_IsRateLimited` (10 req/min injected) |
+| Challenge store bounded under anonymous floods (T6) | AUTOMATED | PASSED | `MaliciousClientTests.ChallengeStore_StaysBounded` (`MaxPendingChallenges`=32) |
+| Per-IP limiter slides window; 0 disables; per-key budget | AUTOMATED | PASSED | `MaliciousClientTests.RateLimiter_SlidesWindowAndZeroDisables` |
+| Stalled request body ⇒ 408 `E_IDLE_TIMEOUT` over raw TLS (T4 endless streams) | AUTOMATED | PASSED | `MaliciousClientTests.StalledRequestBody_TimesOutWith408E_IDLE_TIMEOUT` (headers promise 100000 B, send 12 B, silence) |
+| Idle expiry ⇒ 410 `E_SESSION_EXPIRED` + staging purged (T10) | AUTOMATED | PASSED | `MaliciousClientTests.IdleExpiry_Returns410AndPurgesStaging` (`IdleTimeout` 400 ms) |
+| Device revocation kills device + session tokens; re-pair restores access (T10, ADR-016) | AUTOMATED | PASSED | `MaliciousClientTests.RevokedDevice_LosesAccess_AndCanRePairWithFreshPin` |
+| Internal errors ⇒ generic 500 `E_INTERNAL`, no paths/stacks (T8) | AUTOMATED | PASSED | `MaliciousClientTests.ErrorResponses_DoNotLeakInternals` |
+| Path-sanitizer fuzz: 20k seeded hostile inputs, no throw, determinism, containment, idempotence | AUTOMATED | PASSED | `PathSanitizerFuzzTests.SeededFuzz_20000HostilePaths_NoThrow_Containment_Determinism_Idempotence` |
+| Depth boundary 64 ACCEPT / 65 REJECT; backslash inert; control chars 0x00–0x1F+0x7F reject | AUTOMATED | PASSED | `PathSanitizerFuzzTests.DepthBoundary_…`, `BackslashTraversal_IsInert`, `ControlCharacters_RejectTheWholePath` |
+| Reserved-name rename table (all CON/PRN/AUX/NUL/COM0–9/LPT0–9 × ext, case-insensitive, stable) | AUTOMATED | PASSED | `PathSanitizerFuzzTests.ReservedDeviceNames_AreRenamedNotRejected` |
+| Hostile-shape verdict table matches documented policy | AUTOMATED | PASSED | `PathSanitizerFuzzTests.HostileShapes_ReceiveTheDocumentedVerdict` |
+| Destination guard: system dirs blocked, `Windows2`/`Windows.old` siblings allowed, slash normalization | AUTOMATED | PASSED | `DestinationGuardTests` (11 tests: boundary-aware prefix, trailing/forward slash, multi-root, case-insensitivity on Windows) |
+| `StartAsync` refuses protected destination before creating anything (T4, SPEC §6.2) | AUTOMATED | PASSED | `DestinationGuardTests.StartAsync_RejectsProtectedDestination` (destination dir does not exist afterwards) |
+| Golden vectors cover backslash + depth policy; docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` (path_policy.json gained 6 cases) |
+| Windows receiver build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local, 2026-11-18) |
+| Swift sender against M2 hardening (path policy parity on macOS) | AUTOMATED | **NOT RUN** | No Swift toolchain on Windows (ADR-010); `swift test --package-path mac-sender/Core` on macOS / `macos-latest` CI job |
+| GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet |
+
+## M3–M7 (rows added as milestones start)
 
 See `docs/SPEC.md` §10 for the required coverage; each milestone adds its rows here before exit.
 

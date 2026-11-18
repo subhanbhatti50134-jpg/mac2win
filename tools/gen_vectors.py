@@ -91,9 +91,10 @@ def gen_bytes(seed: bytes, n: int) -> bytes:
 # Path policy (SPEC §6.2) — pinned by protocol/vectors/path_policy.json
 # --------------------------------------------------------------------------------------
 
-INVALID_CHARS = set('<>:"|?*')
+INVALID_CHARS = set('<>:"|?*\\')
 RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(10)} | {f"LPT{i}" for i in range(10)}
 MAX_COMPONENT = 255  # UTF-16 code units
+MAX_PATH_DEPTH = 64  # path segments (SPEC §7 resource limits)
 
 
 def _utf16_len(s: str) -> int:
@@ -153,6 +154,8 @@ def sanitize_path(path: str) -> tuple[str, str]:
     segments = [seg for seg in segments if seg != "."]
     if not segments:
         return "REJECT", "EMPTY"
+    if len(segments) > MAX_PATH_DEPTH:
+        return "REJECT", "PATH_TOO_DEEP"
     segments = [sanitize_component(seg) for seg in segments]
     final = "/".join(segments)
     return ("ACCEPT" if segments == original else "SANITIZE"), final
@@ -275,6 +278,17 @@ def build_nfc_and_paths() -> dict:
         {"input": "b" * 300 + ".dat", "verdict": "SANITIZE",
          "finalPath": None,  # filled below: truncation + hash suffix
          "note": "over-long component: truncate to 246 UTF-16 units + '-' + sha256(component)[:8]"},
+        # --- backslash: a filename character on the wire, an invalid Windows char ---
+        {"input": "folder\\name.txt", "verdict": "SANITIZE", "finalPath": "folder_name.txt",
+         "note": "'\\' is never a wire separator; replaced like other invalid Windows chars"},
+        {"input": "..\\..\\evil.dll", "verdict": "SANITIZE", "finalPath": ".._.._evil.dll",
+         "note": "backslash-style traversal cannot escape the destination"},
+        {"input": "deep/..\\..\\evil", "verdict": "SANITIZE", "finalPath": "deep/.._.._evil"},
+        # --- depth limit (SPEC §7) ---
+        {"input": "/".join(["seg"] * 64), "verdict": "ACCEPT",
+         "finalPath": "/".join(["seg"] * 64), "note": "exactly MAX_PATH_DEPTH segments is allowed"},
+        {"input": "/".join(["seg"] * 65), "verdict": "REJECT", "reason": "PATH_TOO_DEEP"},
+        {"input": "/".join(["d"] * 70), "verdict": "REJECT", "reason": "PATH_TOO_DEEP"},
         # --- REJECT (hostile) ---
         {"input": "../../etc/passwd", "verdict": "REJECT", "reason": "PATH_TRAVERSAL"},
         {"input": "/etc/passwd", "verdict": "REJECT", "reason": "ROOTED"},

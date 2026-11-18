@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -26,6 +27,7 @@ public sealed class ReceiverServer : IAsyncDisposable
     private readonly ConcurrentDictionary<string, DeviceRecord> _devices = new();      // sha256(pubkey) → record
     private readonly TokenVault _deviceTokens = new();
     private readonly TokenVault _sessionTokens = new();
+    private readonly AuthRateLimiter _authLimiter;
     private readonly X509Certificate2 _certificate;
 
     public ReceiverOptions Options { get; }
@@ -33,6 +35,8 @@ public sealed class ReceiverServer : IAsyncDisposable
     public string CertFingerprint { get; }
     public int Port { get; private set; }
     public int ActiveSessions => _sessions.Count;
+    /// <summary>Pending auth nonces right now (bounded by MaxPendingChallenges; diagnostics/tests).</summary>
+    public int PendingChallengeCount => _challenges.Count;
 
     private sealed record DeviceRecord(string DeviceId, byte[] PublicKeyDer, string DeviceName, DateTimeOffset PairedAt);
 
@@ -44,11 +48,37 @@ public sealed class ReceiverServer : IAsyncDisposable
         Port = options.Port;
         CertFingerprint = CertificateProvider.FingerprintSha256(cert);
         Pins = new PinVault(options.FixedTestPin);
+        _authLimiter = new AuthRateLimiter(options.AuthRateLimit, options.AuthRateWindow);
+    }
+
+    /// <summary>Trusted (paired) devices, newest pairing last (SPEC §4 trusted-devices list).</summary>
+    public IReadOnlyList<TrustedDevice> TrustedDevices =>
+        _devices.Values
+            .OrderBy(d => d.PairedAt)
+            .Select(d => new TrustedDevice(d.DeviceId, d.DeviceName, d.PairedAt))
+            .ToList();
+
+    /// <summary>
+    /// Revoke a paired device (ADR-016): drops it from the trusted list and invalidates
+    /// its device token plus the session tokens of sessions it owns. Re-pairing requires
+    /// a fresh PIN, and every transfer still needs explicit approval (SPEC §4).
+    /// </summary>
+    public void RevokeDevice(string deviceId)
+    {
+        foreach (var kv in _devices.Where(kv => kv.Value.DeviceId == deviceId))
+            _devices.TryRemove(kv.Key, out _);
+        _deviceTokens.RevokeOwner(deviceId);
+        foreach (var session in _sessions.Values.Where(s =>
+                     string.Equals(s.OwnerDeviceId, deviceId, StringComparison.Ordinal)))
+            _sessionTokens.RevokeOwner(session.Id);
     }
 
     public static async Task<ReceiverServer> StartAsync(ReceiverOptions options,
         CancellationToken ct = default)
     {
+        // refuse system destinations before creating or touching anything (SPEC §6.2)
+        DestinationGuard.EnsureAllowed(options.DestinationRoot, options.ProtectedDestinationRoots);
+
         if (!Directory.Exists(options.DestinationRoot))
             Directory.CreateDirectory(options.DestinationRoot);
 
@@ -63,6 +93,7 @@ public sealed class ReceiverServer : IAsyncDisposable
         builder.WebHost.ConfigureKestrel(k =>
         {
             k.Limits.MaxRequestBodySize = ProtocolConstants.MaxChunkSize + 1024 * 1024;
+            k.Limits.MaxConcurrentConnections = 128; // SPEC §7 connection limits
             k.Listen(options.BindAddress, options.Port, lo => lo.UseHttps(cert));
         });
 
@@ -102,10 +133,15 @@ public sealed class ReceiverServer : IAsyncDisposable
             });
         });
 
-        v1.MapPost("/auth/challenge", () =>
+        v1.MapPost("/auth/challenge", (HttpContext ctx) =>
         {
+            LimitAuth(ctx);
             var nonce = NewChallenge();
-            return Results.Ok(new { serverNonce = nonce, expiresIn = 300 });
+            return Results.Ok(new
+            {
+                serverNonce = nonce,
+                expiresIn = (int)Options.ChallengeTtl.TotalSeconds,
+            });
         });
 
         v1.MapPost("/pair", HandlePairAsync);
@@ -178,6 +214,13 @@ public sealed class ReceiverServer : IAsyncDisposable
             {
                 await WriteErrorAsync(ctx, new ProtocolException(ErrorCode.E_BAD_REQUEST, "malformed JSON: " + jex.Message));
             }
+            catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
+            {
+                // JSON shape errors: required field missing, or a field of the wrong kind
+                // (hostile input is a bad request, not an internal failure)
+                await WriteErrorAsync(ctx, new ProtocolException(ErrorCode.E_BAD_REQUEST,
+                    ex is KeyNotFoundException ? "missing required JSON field" : "invalid JSON field type"));
+            }
             catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
             {
                 // client went away: no response possible, no log of content
@@ -213,11 +256,40 @@ public sealed class ReceiverServer : IAsyncDisposable
     private string NewChallenge()
     {
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        _challenges[nonce] = DateTimeOffset.UtcNow.AddMinutes(5);
-        foreach (var kv in _challenges.Where(kv => kv.Value < DateTimeOffset.UtcNow))
+        var now = DateTimeOffset.UtcNow;
+        _challenges[nonce] = now + Options.ChallengeTtl;
+        foreach (var kv in _challenges.Where(kv => kv.Value < now))
             _challenges.TryRemove(kv.Key, out _);
+        // bound memory under anonymous challenge floods (SPEC §7): evict oldest-expiring
+        while (_challenges.Count > Options.MaxPendingChallenges)
+        {
+            string? oldestKey = null;
+            var oldestExpiry = DateTimeOffset.MaxValue;
+            foreach (var kv in _challenges)
+            {
+                if (kv.Value < oldestExpiry)
+                {
+                    oldestExpiry = kv.Value;
+                    oldestKey = kv.Key;
+                }
+            }
+            if (oldestKey is null || !_challenges.TryRemove(oldestKey, out _))
+                break;
+        }
         return nonce;
     }
+
+    /// <summary>Per-IP sliding-window limit for unauthenticated auth endpoints (SPEC §7).</summary>
+    private void LimitAuth(HttpContext ctx)
+    {
+        if (Options.AuthRateLimit <= 0) return;
+        var client = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        if (!_authLimiter.TryAcquire(client))
+            throw new ProtocolException(ErrorCode.E_RATE_LIMITED,
+                $"too many auth requests; retry in {Math.Ceiling(AuthRateWindowSeconds):0}s");
+    }
+
+    private double AuthRateWindowSeconds => Options.AuthRateWindow.TotalSeconds;
 
     private string ConsumeChallenge(string? nonce)
     {
@@ -230,6 +302,7 @@ public sealed class ReceiverServer : IAsyncDisposable
 
     private async Task<IResult> HandlePairAsync(HttpContext ctx, CancellationToken ct)
     {
+        LimitAuth(ctx);
         using var doc = await ReadJson(ctx, ct);
         var root = doc.RootElement;
         var version = root.GetProperty("protocolVersion").GetInt32();
@@ -301,6 +374,7 @@ public sealed class ReceiverServer : IAsyncDisposable
 
     private async Task<IResult> HandleHelloAsync(HttpContext ctx, CancellationToken ct)
     {
+        LimitAuth(ctx);
         using var doc = await ReadJson(ctx, ct);
         var root = doc.RootElement;
         var deviceId = root.GetProperty("deviceId").GetString()
@@ -410,7 +484,7 @@ public sealed class ReceiverServer : IAsyncDisposable
     private async Task<IResult> HandleManifestAsync(HttpContext ctx, string id, CancellationToken ct)
     {
         var session = GetSessionScoped(ctx, id);
-        using var doc = await ReadJson(ctx, ct);
+        using var doc = await ReadJson(ctx, ct, ErrorCode.E_MANIFEST_TOO_LARGE);
         var root = doc.RootElement;
         var batchIndex = root.GetProperty("batchIndex").GetInt32();
         var final = root.GetProperty("final").GetBoolean();
@@ -472,7 +546,10 @@ public sealed class ReceiverServer : IAsyncDisposable
         var declared = ctx.Request.Headers["X-Chunk-Sha256"].FirstOrDefault();
         if (string.IsNullOrEmpty(declared))
             throw new ProtocolException(ErrorCode.E_BAD_REQUEST, "X-Chunk-Sha256 header missing");
-        var result = await session.PutChunkAsync(fileId, index, ctx.Request.Body, declared, ct);
+        var body = StallTimeoutStream.Wrap(ctx.Request.Body, Options.BodyStallTimeout,
+            ctx.RequestAborted);
+        var result = await session.PutChunkAsync(fileId, index, body, declared, ct,
+            ctx.Request.ContentLength);
         return Results.Ok(result);
     }
 
@@ -492,11 +569,50 @@ public sealed class ReceiverServer : IAsyncDisposable
 
     // ------------------------------------------------------------- auth utils
 
-    private static async Task<JsonDocument> ReadJson(HttpContext ctx, CancellationToken ct)
+    /// <summary>
+    /// Bounded JSON body read (SPEC §7 resource limits): a body over the cap fails with
+    /// <paramref name="tooLarge"/> (E_MANIFEST_TOO_LARGE for manifest batches,
+    /// E_LIMIT_EXCEEDED elsewhere) before more than limit+1 bytes are ever buffered, a
+    /// stalled body fails with E_IDLE_TIMEOUT, and malformed JSON fails with
+    /// E_BAD_REQUEST — hostile input never reaches an unbounded parse.
+    /// </summary>
+    private async Task<JsonDocument> ReadJson(HttpContext ctx, CancellationToken ct,
+        ErrorCode tooLarge = ErrorCode.E_LIMIT_EXCEEDED)
     {
+        var limit = tooLarge == ErrorCode.E_MANIFEST_TOO_LARGE
+            ? ProtocolConstants.MaxBatchJsonBytes
+            : ProtocolConstants.MaxControlJsonBytes;
+
+        if (ctx.Request.ContentLength is { } declared && declared > limit)
+            throw new ProtocolException(tooLarge,
+                $"request body of {declared} bytes exceeds the {limit} byte limit");
+
+        // wrapper enforces the no-progress timeout; Kestrel owns the inner stream (no dispose)
+        var body = StallTimeoutStream.Wrap(ctx.Request.Body, Options.BodyStallTimeout,
+            ctx.RequestAborted);
+        using var payload = new MemoryStream();
+        var rent = ArrayPool<byte>.Shared.Rent(64 * 1024);
         try
         {
-            return await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ct);
+            while (true)
+            {
+                var n = await body.ReadAsync(rent.AsMemory(), ct);
+                if (n == 0) break;
+                payload.Write(rent, 0, n);
+                if (payload.Length > limit)
+                    throw new ProtocolException(tooLarge,
+                        $"request body exceeds the {limit} byte limit");
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rent);
+        }
+
+        payload.Position = 0;
+        try
+        {
+            return await JsonDocument.ParseAsync(payload, cancellationToken: ct);
         }
         catch (JsonException ex)
         {
@@ -523,7 +639,11 @@ public sealed class ReceiverServer : IAsyncDisposable
     {
         if (!_sessions.TryGetValue(id, out var session))
             throw new ProtocolException(ErrorCode.E_SESSION_NOT_FOUND, "unknown session");
+        // expire BEFORE touching: a session that ran out of TTL/idle stays expired
         session.ExpireIfDue();
+        if (session.Status == SessionStatus.Expired)
+            throw new ProtocolException(ErrorCode.E_SESSION_EXPIRED, "session expired");
+        session.Touch(); // activity refreshes the idle clock (post-approval only)
         return session;
     }
 

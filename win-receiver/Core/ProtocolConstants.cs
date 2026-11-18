@@ -19,6 +19,18 @@ public static class ProtocolConstants
     public const int MaxEntriesPerBatch = 1000;
     public const int MaxBatchJsonBytes = 1024 * 1024;
 
+    /// <summary>Cap for every other JSON request body (pair/hello/session/confirm/commit).</summary>
+    public const int MaxControlJsonBytes = 1024 * 1024;
+
+    /// <summary>
+    /// Maximum path depth in segments (SPEC §7 resource limits). Over-deep paths are
+    /// rejected with reason PATH_TOO_DEEP; pinned by protocol/vectors/path_policy.json.
+    /// </summary>
+    public const int MaxPathDepth = 64;
+
+    /// <summary>Pending auth challenges held at once; oldest evicted beyond this (SPEC §7).</summary>
+    public const int MaxPendingChallenges = 1024;
+
     /// <summary>Chunk size bounds (SPEC §5): 1 MiB .. 64 MiB, default 4 MiB.</summary>
     public const int MinChunkSize = 1 * 1024 * 1024;
     public const int MaxChunkSize = 64 * 1024 * 1024;

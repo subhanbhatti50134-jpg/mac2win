@@ -93,6 +93,41 @@
       "note": "over-long component: truncate to 246 UTF-16 units + '-' + sha256(component)[:8]"
     },
     {
+      "input": "folder\\name.txt",
+      "verdict": "SANITIZE",
+      "finalPath": "folder_name.txt",
+      "note": "'\\' is never a wire separator; replaced like other invalid Windows chars"
+    },
+    {
+      "input": "..\\..\\evil.dll",
+      "verdict": "SANITIZE",
+      "finalPath": ".._.._evil.dll",
+      "note": "backslash-style traversal cannot escape the destination"
+    },
+    {
+      "input": "deep/..\\..\\evil",
+      "verdict": "SANITIZE",
+      "finalPath": "deep/.._.._evil"
+    },
+    {
+      "input": "seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg",
+      "verdict": "ACCEPT",
+      "finalPath": "seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg",
+      "note": "exactly MAX_PATH_DEPTH segments is allowed"
+    },
+    {
+      "input": "seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg",
+      "verdict": "REJECT",
+      "reason": "PATH_TOO_DEEP",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c"
+    },
+    {
+      "input": "d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d",
+      "verdict": "REJECT",
+      "reason": "PATH_TOO_DEEP",
+      "finalPath": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-a1f1339c"
+    },
+    {
       "input": "../../etc/passwd",
       "verdict": "REJECT",
       "reason": "PATH_TRAVERSAL",

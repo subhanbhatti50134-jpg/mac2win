@@ -36,7 +36,8 @@ public sealed class ProtocolTestClient : IDisposable
     private ECDsa? _deviceKey;
 
     public string PinnedFingerprint { get; }
-    public string? DeviceId { get; private set; }
+    /// <summary>Paired device id (settable so hostile-hello tests can send an unknown one).</summary>
+    public string? DeviceId { get; set; }
     public string? DeviceToken { get; private set; }
 
     public ProtocolTestClient(Uri baseUri, string pinnedFingerprint)
@@ -72,6 +73,16 @@ public sealed class ProtocolTestClient : IDisposable
         if (bearer is not null) req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + bearer);
         req.Content = new StringContent(JsonSerializer.Serialize(body, Json),
             Encoding.UTF8, "application/json");
+        using var resp = await _http.SendAsync(req);
+        return await ToApiResponse(resp);
+    }
+
+    /// <summary>POST with a raw body string (malformed-JSON / oversized-body tests).</summary>
+    public async Task<ApiResponse> PostRawAsync(string path, string rawJson, string? bearer = null)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, path);
+        if (bearer is not null) req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + bearer);
+        req.Content = new StringContent(rawJson, Encoding.UTF8, "application/json");
         using var resp = await _http.SendAsync(req);
         return await ToApiResponse(resp);
     }
@@ -112,31 +123,52 @@ public sealed class ProtocolTestClient : IDisposable
         return DeviceToken;
     }
 
+    /// <summary>When true, <see cref="PairRawAsync"/> corrupts the pinProof (tamper tests).</summary>
+    public bool TamperPinProof { get; set; }
+
+    /// <summary>When true, hello requests corrupt the signature (tamper tests).</summary>
+    public bool TamperSignature { get; set; }
+
+    /// <summary>protocolVersion sent by /v1/pair (wrong-version tests).</summary>
+    public int PairProtocolVersion { get; set; } = ProtocolConstants.ProtocolVersion;
+
     /// <summary>
     /// Pairs with the receiver using the PIN-bound proof. Returns the raw response so
     /// security tests can assert on failures (wrong PIN, lockout) without exceptions.
     /// </summary>
-    public async Task<ApiResponse> PairRawAsync(string pin)
+    public async Task<ApiResponse> PairRawAsync(string pin, TimeSpan? challengeDelay = null)
     {
         var challenge = await PostJsonAsync("/v1/auth/challenge", new { });
         var serverNonce = challenge.Body.GetProperty("serverNonce").GetString()!;
+        if (challengeDelay is { } delay)
+            await Task.Delay(delay); // let the challenge expire before pairing (TTL tests)
+        var body = await BuildPairBodyAsync(pin, serverNonce);
+        return await PostRawAsync("/v1/pair", body);
+    }
 
+    /// <summary>
+    /// Builds the exact JSON body for /v1/pair against an already-obtained
+    /// <paramref name="serverNonce"/> (replay/expiry tests post it more than once).
+    /// </summary>
+    public async Task<string> BuildPairBodyAsync(string pin, string serverNonce)
+    {
         _deviceKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var pubkeyDer = _deviceKey.ExportSubjectPublicKeyInfo();
         var clientNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var pubkeyB64 = Convert.ToBase64String(pubkeyDer);
 
         var proof = PairingProof.ComputeProof(pin, PinnedFingerprint, clientNonce, serverNonce, pubkeyB64);
+        if (TamperPinProof) proof[0] ^= 0xFF; // still valid base64, wrong bytes ⇒ E_PIN_INVALID
 
-        return await PostJsonAsync("/v1/pair", new
+        return JsonSerializer.Serialize(new
         {
-            protocolVersion = 1,
+            protocolVersion = PairProtocolVersion,
             deviceName = "integration-test-mac",
             devicePublicKey = pubkeyB64,
             clientNonce,
             serverNonce,
             pinProof = Convert.ToBase64String(proof),
-        });
+        }, Json);
     }
 
     public async Task<string> PairAsync(string pin)
@@ -144,18 +176,29 @@ public sealed class ProtocolTestClient : IDisposable
         var pair = await PairRawAsync(pin);
         if (!pair.IsSuccess)
             throw new InvalidOperationException($"pair failed: {pair.Status} {pair.ErrorCode} {pair.ErrorMessage}");
-        return pair.Body.GetProperty("deviceId").GetString()!;
+        DeviceId = pair.Body.GetProperty("deviceId").GetString()!;
+        return DeviceId;
     }
 
     public async Task<string> HelloAsync()
+    {
+        var hello = await HelloRawAsync();
+        if (!hello.IsSuccess)
+            throw new InvalidOperationException($"hello failed: {hello.Status} {hello.ErrorCode} {hello.ErrorMessage}");
+        return hello.Body.GetProperty("deviceToken").GetString()!;
+    }
+
+    /// <summary>Raw hello response (tamper tests assert on the failure without exceptions).</summary>
+    public async Task<ApiResponse> HelloRawAsync()
     {
         var challenge = await PostJsonAsync("/v1/auth/challenge", new { });
         var serverNonce = challenge.Body.GetProperty("serverNonce").GetString()!;
         var clientNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var message = Encoding.UTF8.GetBytes($"{clientNonce}|{serverNonce}");
         var signature = _deviceKey!.SignData(message, HashAlgorithmName.SHA256);
+        if (TamperSignature) signature[0] ^= 0xFF; // valid base64, wrong bytes ⇒ E_UNAUTHORIZED
 
-        var hello = await PostJsonAsync("/v1/auth/hello", new
+        return await PostJsonAsync("/v1/auth/hello", new
         {
             deviceId = DeviceId,
             deviceName = "integration-test-mac",
@@ -163,9 +206,6 @@ public sealed class ProtocolTestClient : IDisposable
             serverNonce,
             signature = Convert.ToBase64String(signature),
         });
-        if (!hello.IsSuccess)
-            throw new InvalidOperationException($"hello failed: {hello.Status} {hello.ErrorCode} {hello.ErrorMessage}");
-        return hello.Body.GetProperty("deviceToken").GetString()!;
     }
 
     // -------------------------------------------------------------- sessions

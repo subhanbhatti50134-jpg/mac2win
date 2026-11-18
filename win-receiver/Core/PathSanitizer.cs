@@ -21,7 +21,9 @@ public static class PathSanitizer
         public string FinalPath => Verdict == Verdict.Reject ? string.Empty : Value;
     }
 
-    private static readonly HashSet<char> InvalidChars = new("<>:\"|?*");
+    // '\' is a filename character on the wire ('/' is the only separator) and an invalid
+    // Windows character — replacing it keeps `..\..\evil` from ever acting as traversal.
+    private static readonly HashSet<char> InvalidChars = new("<>:\"|?*\\");
     private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
     {
         "CON", "PRN", "AUX", "NUL",
@@ -58,6 +60,8 @@ public static class PathSanitizer
         segments = segments.Where(s => s != ".").ToArray();
         if (segments.Length == 0)
             return new Result(Verdict.Reject, "EMPTY");
+        if (segments.Length > ProtocolConstants.MaxPathDepth)
+            return new Result(Verdict.Reject, "PATH_TOO_DEEP");
 
         var sanitized = segments.Select(SanitizeComponent).ToArray();
         var final = string.Join("/", sanitized);
