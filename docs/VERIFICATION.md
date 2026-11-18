@@ -160,6 +160,37 @@ are REAL-DEVICE. See docs/PERFORMANCE.md for full detail.
 | iperf3 LAN baseline / 85–90% link capacity | REAL-DEVICE | **NOT RUN** | needs second machine + iperf3 |
 | mDNS discovery ≤5 s on home network | REAL-DEVICE | **NOT RUN** | needs LAN |
 
+## M6 — QA and security audit
+
+All rows below from `dotnet test win-receiver/WinReceiver.sln -c Release` on this machine,
+2026-11-18: **149/149 passed** (133 Core + 9 App + 7 Perf), 0 build warnings.
+
+| Feature | Level | Status | Evidence |
+|---|---|---|---|
+| Full test matrix green (Core + App + Perf) | AUTOMATED | PASSED | `dotnet test win-receiver/WinReceiver.sln -c Release` → 149/149, 0 warnings |
+| Path-sanitizer fuzz: 20,000 seeded hostile paths, no throw, containment, determinism, idempotence | AUTOMATED | PASSED | `PathSanitizerFuzzTests.SeededFuzz_20000HostilePaths_…` |
+| Manifest-parser fuzz: 1,000 random JSON batches over real HTTP, no 500/crash, structured errors only | AUTOMATED | PASSED | `ManifestParserFuzzTests.ManifestEndpoint_NeverCrashes_OnRandomBatches` |
+| Dependency vulnerability audit: no vulnerable packages (incl. transitive) | AUTOMATED | PASSED | `dotnet list package --vulnerable --include-transitive` → none |
+| Build warnings-as-errors: 0 warnings, 0 errors | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` |
+| Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` |
+| CI YAML valid | AUTOMATED | PASSED | `npx --yes js-yaml .github/workflows/ci.yml` → OK |
+| GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet |
+
+## M7 — Release
+
+Installer script drafted (`win-receiver/installer/Mac2WinReceiver.iss`, Inno Setup per ADR-004)
+and final report written (`docs/FINAL_REPORT.md`). Actual installer builds, signing, and
+notarization require Inno Setup + a code-signing cert (Windows) and Developer ID +
+notarytool (macOS) — not available on this workstation.
+
+| Feature | Level | Status | Evidence |
+|---|---|---|---|
+| Inno Setup installer script drafted | — | PASSED | `win-receiver/installer/Mac2WinReceiver.iss` |
+| Final report (SPEC §15: features, matrix, perf, limits, human actions, build/install/release) | — | PASSED | `docs/FINAL_REPORT.md` |
+| Windows installer build + signtool signing | REAL-DEVICE | **NOT RUN** | no iscc / no signing cert locally |
+| macOS .app + DMG + codesign + notarize + staple | REAL-DEVICE | **NOT RUN** | no macOS / no Developer ID |
+| GitHub Actions CI release job (publish artifacts) | AUTOMATED | **NOT RUN** | no GitHub remote |
+
 ## M4–M7 (rows added as milestones start)
 
 See `docs/SPEC.md` §10 for the required coverage; each milestone adds its rows here before exit.
