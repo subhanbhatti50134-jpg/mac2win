@@ -133,10 +133,21 @@ dotnet test win-receiver/Core.Tests/Mac2WinReceiver.Core.Tests.csproj -c Release
 swift test --package-path mac-sender/Core   # macOS only
 ```
 
-**Release artifacts (M7, to be produced on CI with signing identities):**
-- Windows: self-contained single-file publish (win-x64) + Inno Setup installer
-  (`win-receiver/installer`), unsigned placeholder; sign with signtool.
-- macOS: universal arm64+x86_64 .app + unsigned DMG; codesign, notarize, staple.
+**Release artifacts (M7):**
+- **Windows:** self-contained publish produced locally
+  (`win-receiver\App\bin\Release\net10.0-windows\win-x64\publish\`,
+  includes `Mac2WinReceiver.App.exe`). Inno Setup script at
+  `win-receiver/installer/Mac2WinReceiver.iss`; build + (optional) sign with
+  `win-receiver/installer/publish-windows.ps1`. `iscc` / signing cert not available on
+  this workstation → `.exe` installer build NOT RUN.
+- **macOS:** packaging skeleton ready for macOS CI
+  (`mac-sender/App/Info.plist`, `Entitlements.plist`, `build_dmg.sh`). SwiftUI app
+  sources added under `mac-sender/App/Sources/Mac2WinSender/` and wired to the existing
+  core via a new `Mac2WinSender` executable target in `mac-sender/Core/Package.swift`.
+  Cannot build the `.app`/DMG here (no Xcode/Swift on Windows, ADR-010) → NOT RUN;
+  runs on `macos-latest` CI via `build_dmg.sh` once codesign/notary credentials are set
+  (env-var placeholders: `MAC2WIN_CODESIGN_IDENTITY`, `MAC2WIN_NOTARY_APPLE_ID`,
+  `MAC2WIN_NOTARY_PASSWORD`, `MAC2WIN_TEAM_ID`).
 
 Repository has no GitHub remote; CI jobs are written but not yet run. Add a remote and
 push to enable CI.

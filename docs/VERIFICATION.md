@@ -178,17 +178,18 @@ All rows below from `dotnet test win-receiver/WinReceiver.sln -c Release` on thi
 
 ## M7 — Release
 
-Installer script drafted (`win-receiver/installer/Mac2WinReceiver.iss`, Inno Setup per ADR-004)
-and final report written (`docs/FINAL_REPORT.md`). Actual installer builds, signing, and
-notarization require Inno Setup + a code-signing cert (Windows) and Developer ID +
-notarytool (macOS) — not available on this workstation.
+Installer packaging prepared (actual builds require tooling not on this workstation):
 
 | Feature | Level | Status | Evidence |
 |---|---|---|---|
-| Inno Setup installer script drafted | — | PASSED | `win-receiver/installer/Mac2WinReceiver.iss` |
-| Final report (SPEC §15: features, matrix, perf, limits, human actions, build/install/release) | — | PASSED | `docs/FINAL_REPORT.md` |
-| Windows installer build + signtool signing | REAL-DEVICE | **NOT RUN** | no iscc / no signing cert locally |
-| macOS .app + DMG + codesign + notarize + staple | REAL-DEVICE | **NOT RUN** | no macOS / no Developer ID |
+| Windows self-contained publish (win-x64) incl. `Mac2WinReceiver.App.exe` | AUTOMATED | PASSED | `dotnet publish win-receiver/App -c Release -r win-x64 --self-contained` → 407 files, exe present |
+| Inno Setup installer script (`Mac2WinReceiver.iss`, ADR-004) references publish output | — | PASSED | `win-receiver/installer/Mac2WinReceiver.iss` |
+| Windows publish + installer build script (`publish-windows.ps1`) | — | PASSED | `win-receiver/installer/publish-windows.ps1` |
+| Windows `.exe` installer build (Inno Setup `iscc`) | REAL-DEVICE | **NOT RUN** | `iscc` not installed on this workstation |
+| Windows installer code-signing (signtool) | REAL-DEVICE | **NOT RUN** | no code-signing cert |
+| macOS packaging skeleton: Info.plist, Entitlements.plist, build_dmg.sh | — | PASSED | `mac-sender/App/{Info.plist,Entitlements.plist,build_dmg.sh}` |
+| macOS SwiftUI app sources + `Mac2WinSender` executable target | — | PASSED | `mac-sender/App/Sources/Mac2WinSender/`, Package.swift target added |
+| macOS universal .app + signed DMG (xcodebuild + codesign + notarytool + stapler) | REAL-DEVICE | **NOT RUN** | no Xcode/Swift on Windows (ADR-010); runs on `macos-latest` CI |
 | GitHub Actions CI release job (publish artifacts) | AUTOMATED | **NOT RUN** | no GitHub remote |
 
 ## M4–M7 (rows added as milestones start)

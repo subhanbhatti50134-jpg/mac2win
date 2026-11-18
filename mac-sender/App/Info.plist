@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Mac2Win Transfer</string>
+	<key>CFBundleExecutable</key>
+	<string>Mac2WinSender</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.mac2win.sender</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Mac2WinSender</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.1.0</string>
+	<key>LSRequiresCarbonLeap</key>
+	<false/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© Mac2Win Project</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Mac2Win Transfer discovers receivers on your local network via Bonjour (_mac2win._tcp) and sends files over a direct TLS connection.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_mac2win._tcp</string>
+	</array>
+	<key>NSRequiresAquaSystemAppearance</key>
+	<false/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>
