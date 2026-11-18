@@ -142,6 +142,24 @@ warnings. ADR-017 records the persistence/chaos-proxy decisions.
 | Windows receiver + App build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local, 2026-11-18) |
 | Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` (PROTOCOL.md §2.8 amended for optional `applyToAllDefault` + confirm response echo) |
 | GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet; `macos`/`linux`/`cross-impl` use project-scoped paths (WPF not on non-Windows), `windows` keeps the solution |
+
+## M5 — Performance
+
+All numbers below measured on the development workstation (Win11 build 26300, .NET SDK 10.0.404)
+over loopback via `dotnet test win-receiver/PerfTests -c Release`; real LAN/iperf3 figures
+are REAL-DEVICE. See docs/PERFORMANCE.md for full detail.
+
+| Feature | Level | Status | Evidence |
+|---|---|---|---|
+| Memory bounded and flat regardless of file size/count; under 200 MB target | AUTOMATED | PASSED | `ThroughputAndMemoryTests.Memory_FlatAcrossTransfers_RegardlessOfSize`: WS growth 4.5 / 5.3 / 8.5 MB for 10 MiB / 100 MiB / 1 MiB×200; growth does not scale with bytes |
+| Large-file throughput measured; not disk-limited (24 MB/s vs 1258 MB/s disk copy) | AUTOMATED | PASSED | `ThroughputAndMemoryTests.LargeFile_DiskCopyBaseline_SameOrderOfMagnitude` + `LargeFile_ThroughputAndMemory_UnderTarget` |
+| Small-file rate measured vs 500 files/s target | AUTOMATED | PASSED | `SmallFileTests.SmallFileRate_ReportVsTarget`: 94 / 70 / 51 files/s for 4 KB / 16 KB / 64 KB × 2000 loopback; target not met without pipelining |
+| Resume does not re-send verified chunks (ALREADY_VERIFIED, one file at destination) | AUTOMATED | PASSED | `ResumeTests.Transfer_VerifiesWholeFile_DoesNotResendOnCommitReplay` |
+| All transfer invariants hold on every perf run (SHA-256, no partials, source intact, ledger reconciles) | AUTOMATED | PASSED | `PerfEnv.TransferAsync` asserts invariants on every transfer |
+| docs/PERFORMANCE.md written with actual measured numbers | — | PASSED | `docs/PERFORMANCE.md` |
+| iperf3 LAN baseline / 85–90% link capacity | REAL-DEVICE | **NOT RUN** | needs second machine + iperf3 |
+| mDNS discovery ≤5 s on home network | REAL-DEVICE | **NOT RUN** | needs LAN |
+
 ## M4–M7 (rows added as milestones start)
 
 See `docs/SPEC.md` §10 for the required coverage; each milestone adds its rows here before exit.
