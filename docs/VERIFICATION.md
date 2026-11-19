@@ -4,9 +4,10 @@ Feature × level × status × evidence. Levels: **AUTOMATED** (real sockets/TLS,
 **SIMULATED** (mocks/fault-injection/synthetic), **REAL-DEVICE** (physical Mac ↔ physical PC).
 Status: **PASSED** / **FAILED** / **NOT RUN**. Nothing is PASSED without evidence.
 
-Legend for evidence: command output captured in this repo's build log, or CI run link (once a
-remote exists). Until the repository has a GitHub remote, CI jobs are **written but NOT RUN**;
-their local-equivalent commands are run and recorded here instead.
+Legend for evidence: command output captured in this repo's build log, or a GitHub Actions
+run link. The repository is public at `github.com/subhanbhatti50134-jpg/mac2win`; CI runs on
+every push to `master` (`.github/workflows/ci.yml`, 5 jobs). Local-equivalent commands are
+run and recorded here as well.
 
 ## M0 — Foundations
 
@@ -18,7 +19,7 @@ their local-equivalent commands are run and recorded here instead.
 | Golden vectors generated + self-test | AUTOMATED | PASSED | `python tools/gen_vectors.py` → 5 files; built-in asserts validate every case |
 | Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` |
 | .NET protocol conformance (pairing HKDF/HMAC, manifest digest, chunk hashes+boundaries, error table, path policy, NFC, collisions) | AUTOMATED | PASSED | `dotnet test win-receiver/WinReceiver.sln` → **11/11 passed** (local, this machine) |
-| Swift sender core: same vector suite | AUTOMATED | **NOT RUN** | No Swift toolchain on Windows (ADR-010). Run: on macOS `swift test --package-path mac-sender/Core`, or push to GitHub → `macos-latest` job in `.github/workflows/ci.yml` |
+| Swift sender core: same vector suite | AUTOMATED | PASSED | CI `macos` job: `swift test --package-path mac-sender/Core` green (run 44509698996). No Swift toolchain on Windows (ADR-010) |
 | GitHub Actions CI (all 4 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet. Steps: `git remote add origin <url> && git push -u origin main` → CI badge/link recorded here |
 | Windows receiver build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local) |
 | JSON Schemas validate sample messages | AUTOMATED | **NOT RUN** | Schema-validation test not yet implemented; planned for M1 with `JsonSchema.Net`/`ajv` in CI |
@@ -188,9 +189,10 @@ Installer packaging prepared (actual builds require tooling not on this workstat
 | Windows `.exe` installer build (Inno Setup `iscc`) | AUTOMATED | PASSED | `iscc win-receiver/installer/Mac2WinReceiver.iss` → `win-receiver/installer/Output/Mac2WinReceiver-Setup-0.1.0.exe` (59 MB) |
 | Windows installer code-signing (signtool) | REAL-DEVICE | **NOT RUN** | no code-signing cert |
 | macOS packaging skeleton: Info.plist, Entitlements.plist, build_dmg.sh | — | PASSED | `mac-sender/App/{Info.plist,Entitlements.plist,build_dmg.sh}` |
-| macOS SwiftUI app sources + `Mac2WinSender` executable target | — | PASSED | `mac-sender/App/Sources/Mac2WinSender/`, Package.swift target added |
+| macOS SwiftUI app sources | — | PASSED | `mac-sender/App/Sources/Mac2WinSender/`; built by the Xcode project via `build_dmg.sh` (SwiftPM rejects targets outside the package root — CI caught this, see defect section below) |
 | macOS universal .app + signed DMG (xcodebuild + codesign + notarytool + stapler) | REAL-DEVICE | **NOT RUN** | no Xcode/Swift on Windows (ADR-010); runs on `macos-latest` CI |
-| GitHub Actions CI release job (publish artifacts) | AUTOMATED | **NOT RUN** | no GitHub remote |
+| GitHub Actions CI (vectors, Windows build+tests, macOS, cross-impl, Linux) | AUTOMATED | PASSED | `.github/workflows/ci.yml` runs on every push to `master` (5 jobs); status badge in README |
+| GitHub Actions release job (publish installer artifacts) | AUTOMATED | **NOT RUN** | no release job defined in `ci.yml` yet |
 
 ## Post-release defects found by running the 0.1.0 installer (2026-11-19)
 
@@ -206,6 +208,21 @@ crashes surfaced that no milestone test exercised, because no test ever construc
 | Exactly one main window (no `StartupUri` alongside manual `OnStartup` window creation) | REAL-DEVICE | PASSED | Running the published exe showed **two** top-level windows titled "Mac2Win Transfer - Receiver"; removing `StartupUri` from `App.xaml` leaves one. Manual observation of the live process window list |
 | STA test helper reports failures instead of killing the test host | AUTOMATED | PASSED | `StaRunner.Run` captures the body exception and rethrows it on the test thread via `ExceptionDispatchInfo`. Before: one XAML failure aborted the entire run (`Test host process crashed`); after: `Failed: 2, Passed: 0` with the original stack |
 | Receiver app starts, binds TCP 48600 and shows its window | REAL-DEVICE | PASSED | Published exe launched from `...\publish\Mac2WinReceiver.App.exe`: alive after 8 s, port 48600 LISTENING, 1 visible window. Was: process gone within 10 s, no window, Event Viewer .NET Runtime error |
+
+## Defects found by the first GitHub Actions run (2026-11-19)
+
+The workflow had never run (it triggered on `main`; the default branch is `master`), so the
+first real run surfaced five defects — four build/test-infrastructure, one real protocol bug.
+Each was fixed, verified, and (where applicable) given a regression test.
+
+| Feature | Level | Status | Evidence |
+|---|---|---|---|
+| Wire `status` is SNAKE_CASE on **every** endpoint, not just some (protocol §2.9/§2.13) | AUTOMATED | PASSED | **Real protocol defect:** the state and report endpoints used `Status.ToString().ToUpperInvariant()`, emitting `PREFLIGHTREADY` instead of `PREFLIGHT_READY`. The manifest endpoint used the correct `WireStatus()` helper, so the two disagreed; only the one-word `TRANSFERRING` was asserted by any C# test, which is why it survived locally. Found by the Swift sender in the CI cross-impl job. Fix: both call sites now use `WireStatus()`. Regression test: `StateAndReport_StatusesAreSnakeCase_OnEveryEndpoint` (140th Core test). **Negative control:** reverting line 1215 makes it fail with `Expected: PREFLIGHT_READY, Actual: PREFLIGHTREADY` |
+| SwiftPM package builds on macOS | AUTOMATED | PASSED | CI: `target 'Mac2WinSender' in package 'core' is outside the package root` — `Package.swift` pointed at `../App/Sources/Mac2WinSender`. The SwiftUI app is compiled by the Xcode project (`build_dmg.sh`), so the Core package now exposes only its library + tests. Job `macOS sender + cross-platform core` now green (Swift compiles, Swift tests pass) |
+| Swift pairing proof compiles (CryptoKit API) | AUTOMATED | PASSED | CI: `isValidAuthenticationCode(_:for:using:)` — correct label is `authenticating:`. The Swift sources had never been compiled on this machine (ADR-010), so CI found it one run at a time |
+| NFD normalization check is portable across filesystems | AUTOMATED | PASSED | CI (macOS): `Directory.Exists("cafe<U+0301>")` returned **true** for the NFC directory — APFS is normalization-insensitive, masking the assertion. Now compares stored directory entry names ordinally (`Assert.DoesNotContain` NFD spelling / `Assert.Contains` NFC spelling) |
+| Perf memory measurements are not contaminated by parallel tests | AUTOMATED | PASSED | CI: 19.3 MB peak vs 3.4 MB locally, tripping the ±15 MB flatness window. Cause: xUnit v2 parallelizes collections, so three perf classes sampled a shared process working set. `PerfTests/AssemblyInfo.cs` disables test parallelization (memory sampling needs a quiet process) |
+| Expired-PIN test does not race its own start-up | AUTOMATED | PASSED | CI: `first pair: 403 E_PIN_EXPIRED` — the 250 ms `PinMaxAge` window opened when the PIN was minted inside `StartAsync`, so cold start (TLS + JIT) could burn it before the first `Pair`. Widened to 2 s (test-only knob; assertions and the 5 min protocol default unchanged) |
 
 ## M4–M7 (rows added as milestones start)
 

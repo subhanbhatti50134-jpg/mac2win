@@ -196,6 +196,52 @@ public sealed class TransferTests
         AssertTransferInvariants(env, sources, report);
     }
 
+    /// <summary>
+    /// Wire status is SNAKE_CASE (protocol §2.9/§2.13), including multi-word values.
+    /// The state and report endpoints used <c>Status.ToString().ToUpperInvariant()</c>,
+    /// which emits <c>PREFLIGHTREADY</c>; only the one-word <c>TRANSFERRING</c> was
+    /// covered by tests, so the defect reached the Swift sender in CI before any C# test
+    /// caught it. Every wire status must equal <c>WireStatus</c>.
+    /// </summary>
+    [Fact]
+    public async Task StateAndReport_StatusesAreSnakeCase_OnEveryEndpoint()
+    {
+        await using var env = await TestEnv.StartAsync();
+        var client = await env.AuthenticatedClientAsync();
+        var sources = new Dictionary<string, (string Disk, byte[] Bytes)>(StringComparer.Ordinal);
+
+        var bytes = Data(31, 64);
+        AddSource(env, sources, "s.txt", bytes);
+        var entries = new List<Entry> { FileEntry("s.txt", bytes) };
+
+        // TestEnv auto-approves, so AWAITING_APPROVAL is not observable here; the
+        // approval path already returned MANIFEST_RECEIVING (covered below).
+        var sid = await client.CreateSessionAsync(1, 0, bytes.Length);
+        var token = await client.AwaitApprovalAsync(sid);
+        var receiving = await client.GetAsync($"/v1/sessions/{sid}", client.DeviceToken);
+        Assert.True(receiving.IsSuccess, receiving.ErrorMessage);
+        Assert.Equal("MANIFEST_RECEIVING", receiving.Body.GetProperty("status").GetString());
+
+        var manifest = await SendFinalManifestAsync(client, sid, token, entries);
+        Assert.Equal("PREFLIGHT_READY", manifest.GetProperty("status").GetString());
+
+        // the state endpoint must agree with the manifest endpoint (§2.9)
+        var preflight = await client.GetStateAsync(sid, token);
+        Assert.True(preflight.IsSuccess, preflight.ErrorMessage);
+        Assert.Equal("PREFLIGHT_READY", preflight.Body.GetProperty("status").GetString());
+
+        var fileIds = PlannedFileIds(manifest);
+        var chunkSize = await ConfirmOkAsync(client, sid, token);
+        await UploadAndCommitAsync(client, sid, token, fileIds["s.txt"], bytes, chunkSize);
+
+        var transferring = await client.GetStateAsync(sid, token);
+        Assert.Equal("TRANSFERRING", transferring.Body.GetProperty("status").GetString());
+
+        var report = ReportOf(await client.CompleteAsync(sid, token));
+        Assert.Equal("COMPLETED", report.Status);
+        AssertTransferInvariants(env, sources, report);
+    }
+
     [Fact]
     public async Task BoundarySizes_ZeroOneChunkMinusOneChunkChunkPlus1_AllVerify()
     {

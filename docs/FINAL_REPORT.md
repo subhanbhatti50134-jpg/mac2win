@@ -1,8 +1,9 @@
 # Mac2Win Transfer — Final Report (M7 Release)
 
-Prepared per SPEC §15. Repository state: `main`, milestones M0–M7 complete as far as
-possible on this workstation (Windows 11, .NET SDK 10.0.404, no macOS toolchain, no
-GitHub remote, no physical Mac for real-device tests).
+Prepared per SPEC §15. Repository state: `master`, milestones M0–M7 complete as far as
+possible on this workstation (Windows 11, .NET SDK 10.0.404, no macOS toolchain, public
+GitHub remote at github.com/subhanbhatti50134-jpg/mac2win, no physical Mac for real-device
+tests).
 
 ## 1. What was built (feature list)
 
@@ -68,7 +69,8 @@ See `docs/VERIFICATION.md`. Summary of local automated results (2026-11-18):
 Everything in `docs/VERIFICATION.md` marked REAL-DEVICE (Mac ↔ PC over Wi-Fi, Bonjour ≤5 s,
 installer on clean Windows, codesign/notarization, exFAT/FAT32, iperf3 LAN baseline,
 50 GB transfer) stays NOT RUN until a human executes `docs/REAL_DEVICE_TEST_PLAN.md`.
-GitHub Actions CI (5 jobs) is written and YAML-valid but NOT RUN (no GitHub remote).
+GitHub Actions CI (5 jobs) runs on every push to `master` via `.github/workflows/ci.yml`;
+per-job status is recorded in `docs/VERIFICATION.md`.
 
 ## 3. Measured performance numbers
 
@@ -106,8 +108,6 @@ per-chunk HTTPS round-trips and hashing, not disk. Real LAN/iperf3 figures are R
 
 - Execute `docs/REAL_DEVICE_TEST_PLAN.md` on a physical Mac + PC on the same LAN
   (end-to-end over Wi-Fi, Bonjour discovery ≤5 s, exFAT/FAT32, 4 GiB boundary, iperf3).
-- Run GitHub Actions CI after adding a GitHub remote (`git remote add origin <url> &&
-  git push -u origin main`).
 - Build/sign/notarize:
   - Windows: Inno Setup installer, signtool code-signing (cert placeholder scripted).
   - macOS: universal .app, hardened runtime, entitlements, DMG, codesign + notarytool +
@@ -149,5 +149,6 @@ swift test --package-path mac-sender/Core   # macOS only
   (env-var placeholders: `MAC2WIN_CODESIGN_IDENTITY`, `MAC2WIN_NOTARY_APPLE_ID`,
   `MAC2WIN_NOTARY_PASSWORD`, `MAC2WIN_TEAM_ID`).
 
-Repository has no GitHub remote; CI jobs are written but not yet run. Add a remote and
-push to enable CI.
+The repository is public on GitHub and CI runs on every push to `master` (5 jobs:
+vectors, Windows, macOS, cross-implementation, Linux). Real-device tests remain NOT RUN
+until a human executes `docs/REAL_DEVICE_TEST_PLAN.md`.

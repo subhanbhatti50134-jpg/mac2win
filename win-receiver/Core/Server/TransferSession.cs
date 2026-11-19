@@ -1212,7 +1212,7 @@ public sealed class TransferSession : IDisposable
             var nextCursor = offset + consumed < total ? (offset + consumed).ToString() : null;
 
             return new SessionStateResponse(
-                Status.ToString().ToUpperInvariant(),
+                WireStatus(Status),
                 ManifestDigestHex,
                 ChunkSize,
                 completedPage,
@@ -1315,7 +1315,7 @@ public sealed class TransferSession : IDisposable
         var files = Items.Where(i => i.Type == "file").ToList();
         var report = new SessionReport(
             Id,
-            Status.ToString().ToUpperInvariant(),
+            WireStatus(Status),
             CreatedAt.ToUnixTimeMilliseconds().ToString(),
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(),
             new ReportTotals(

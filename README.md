@@ -88,12 +88,12 @@ Every status claim in this repository is backed by a test or an explicitly label
 manual step — see the honesty rules in [`docs/SPEC.md`](docs/SPEC.md) §1.
 
 ```powershell
-dotnet test win-receiver/WinReceiver.sln -c Release   # 157 tests
+dotnet test win-receiver/WinReceiver.sln -c Release   # 158 tests
 ```
 
 | Suite | Project | Count |
 |---|---|---|
-| Protocol, storage, crypto, pairing | `win-receiver/Core.Tests` | 139 |
+| Protocol, storage, crypto, pairing | `win-receiver/Core.Tests` | 140 |
 | WPF window / startup smoke (STA) | `win-receiver/App.Tests` | 11 |
 | Performance budgets | `win-receiver/Perf.Tests` | 7 |
 

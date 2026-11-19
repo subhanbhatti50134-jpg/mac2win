@@ -44,7 +44,7 @@ Detected at project start. Re-run instructions at the bottom.
 ## Consequences for verification strategy
 
 1. Everything .NET is verified here locally **and** in CI; every result is labeled AUTOMATED.
-2. Swift and cross-implementation results are NOT RUN locally. They are covered by the `macos-latest` CI job. Until the repo has a GitHub remote, those jobs are written but NOT RUN; the exact commands to run them are recorded in docs/VERIFICATION.md.
+2. Swift and cross-implementation results are NOT RUN locally. They are covered by the CI `macos` and `cross-impl` jobs, which run on every push to `master` (the repository is public at github.com/subhanbhatti50134-jpg/mac2win); the exact commands are recorded in docs/VERIFICATION.md.
 3. No result is ever reported as PASSED without a command/log/CI link as evidence.
 
 ## Repository inspection (SPEC §1.3)
