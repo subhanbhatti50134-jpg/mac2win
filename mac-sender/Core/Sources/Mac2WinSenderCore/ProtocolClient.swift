@@ -46,7 +46,10 @@ public final class ProtocolClient: NSObject, URLSessionDelegate {
     public let baseURL: URL
     public let pinnedFingerprint: String
 
-    private let session: URLSession
+    // IUO rather than `let`: Swift requires every stored property to be initialised
+    // before super.init(), but URLSession's delegate must be a fully-initialised `self`.
+    // Assigning after super.init() is the standard resolution for that ordering rule.
+    private var session: URLSession!
     private var deviceKey: P256.Signing.PrivateKey?
     public private(set) var deviceId: String?
     public private(set) var deviceToken: String?
@@ -64,6 +67,7 @@ public final class ProtocolClient: NSObject, URLSessionDelegate {
     public init(baseURL: URL, pinnedFingerprint: String, timeout: TimeInterval = 60) {
         self.baseURL = baseURL
         self.pinnedFingerprint = pinnedFingerprint.lowercased()
+        super.init()
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout * 10
@@ -71,11 +75,10 @@ public final class ProtocolClient: NSObject, URLSessionDelegate {
         config.httpCookieStorage = nil
         config.urlCache = nil
         self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        super.init()
     }
 
     deinit {
-        session.invalidateAndCancel()
+        session?.invalidateAndCancel()
     }
 
     // MARK: - TLS pinning (SPEC §7: no accept-all path)
