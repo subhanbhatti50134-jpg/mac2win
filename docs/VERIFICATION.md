@@ -192,6 +192,21 @@ Installer packaging prepared (actual builds require tooling not on this workstat
 | macOS universal .app + signed DMG (xcodebuild + codesign + notarytool + stapler) | REAL-DEVICE | **NOT RUN** | no Xcode/Swift on Windows (ADR-010); runs on `macos-latest` CI |
 | GitHub Actions CI release job (publish artifacts) | AUTOMATED | **NOT RUN** | no GitHub remote |
 
+## Post-release defects found by running the 0.1.0 installer (2026-11-19)
+
+The shipped Windows build was executed for the first time on a real machine. Two startup
+crashes surfaced that no milestone test exercised, because no test ever constructed the real
+`App`/`MainWindow` — the smoke test drives `ReceiverViewModel` directly.
+
+| Feature | Level | Status | Evidence |
+|---|---|---|---|
+| Certificate subject accepts a bare device name (`Environment.MachineName`), not just an X.500 DN | AUTOMATED | PASSED | `CertificateProviderTests` (6 tests). Reproduced the shipped crash exactly: `CreateEphemeral("DESKTOP-IHAMU4O")` threw `CryptographicException: invalid X500 name attribute key` → `App.OnStartup` died with no window (Event Viewer 13:27). Fix: `CertificateProvider.ToDistinguishedName` — DN strings pass through, bare names are emitted via `X500DistinguishedNameBuilder` (the string parser rejects most RFC 4514 backslash escapes, so hand-escaping was ruled out by probing) |
+| `MainWindow` XAML constructs with every `StaticResource` resolved | AUTOMATED | PASSED | `MainWindowConstructionTests` (2 tests). Reproduced the second shipped crash: undefined `BooleanToVisibilityConverter` → `XamlParseException` at `new MainWindow()` (Event Viewer 13:49). **Negative proof:** commenting out the key makes both tests fail with the original stack trace; restoring it makes them pass |
+| Shared WPF resources in a merged `Themes/AppResources.xaml`, merged by both `App.xaml` and `MainWindow.xaml` | AUTOMATED | PASSED | `App/Themes/AppResources.xaml`; window is self-contained so tests can build it without a running `App` (WPF allows one `Application` per AppDomain) |
+| Exactly one main window (no `StartupUri` alongside manual `OnStartup` window creation) | REAL-DEVICE | PASSED | Running the published exe showed **two** top-level windows titled "Mac2Win Transfer - Receiver"; removing `StartupUri` from `App.xaml` leaves one. Manual observation of the live process window list |
+| STA test helper reports failures instead of killing the test host | AUTOMATED | PASSED | `StaRunner.Run` captures the body exception and rethrows it on the test thread via `ExceptionDispatchInfo`. Before: one XAML failure aborted the entire run (`Test host process crashed`); after: `Failed: 2, Passed: 0` with the original stack |
+| Receiver app starts, binds TCP 48600 and shows its window | REAL-DEVICE | PASSED | Published exe launched from `...\publish\Mac2WinReceiver.App.exe`: alive after 8 s, port 48600 LISTENING, 1 visible window. Was: process gone within 10 s, no window, Event Viewer .NET Runtime error |
+
 ## M4–M7 (rows added as milestones start)
 
 See `docs/SPEC.md` §10 for the required coverage; each milestone adds its rows here before exit.

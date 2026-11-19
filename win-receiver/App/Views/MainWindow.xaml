@@ -8,6 +8,13 @@
         Title="Mac2Win Transfer — Receiver"
         Width="900" Height="700"
         MinWidth="700" MinHeight="500">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/Mac2WinReceiver.App;component/Themes/AppResources.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
     <Window.CommandBindings>
         <CommandBinding Command="Close" Executed="OnCloseExecuted" />
     </Window.CommandBindings>

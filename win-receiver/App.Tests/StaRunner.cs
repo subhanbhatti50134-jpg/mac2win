@@ -12,19 +12,47 @@ public static class StaRunner
 {
     public static void Run(Action body, TimeSpan? timeout = null)
     {
+        // Exceptions thrown on the STA thread must be captured and rethrown here: an unhandled
+        // one tears down the whole test host, turning one failing test into an aborted run
+        // (observed while proving the MainWindow resource test). Shared across the join below
+        // because the thread writes and the test thread reads after Join (full fence).
+        Exception? failure = null;
+
         var t = new Thread(() =>
         {
-            // WPF requires an Application instance on the STA thread
-            _ = new Application();
-            SynchronizationContext.SetSynchronizationContext(
-                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
-            body();
+            try
+            {
+                // WPF allows exactly one Application per AppDomain, but Run() may be called by
+                // many tests — create it only once (a second new Application() throws
+                // InvalidOperationException "Cannot create more than one ... instance").
+                EnsureApplication();
+                SynchronizationContext.SetSynchronizationContext(
+                    new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+                body();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
         })
         { IsBackground = true, Name = "STA test thread" };
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
         t.Join(timeout ?? TimeSpan.FromSeconds(30));
         if (t.IsAlive) throw new TimeoutException("STA test body did not complete in time");
+        if (failure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    private static readonly object AppGate = new();
+    private static Application? _app;
+
+    private static void EnsureApplication()
+    {
+        lock (AppGate)
+        {
+            _app ??= new Application();
+        }
     }
 
     /// <summary>Pumps the WPF dispatcher until a condition becomes true.</summary>
