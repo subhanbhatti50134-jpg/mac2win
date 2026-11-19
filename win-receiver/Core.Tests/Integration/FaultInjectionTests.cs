@@ -740,7 +740,12 @@ public sealed class FaultInjectionTests
     {
         await using var env = await TestEnv.StartAsync(o =>
         {
-            o.PinMaxAge = TimeSpan.FromMilliseconds(250); // test-only knob; protocol default 5 min
+            // test-only knob; protocol default 5 min unchanged.
+            // 250 ms was too tight: the window opened when the PIN was minted inside
+            // StartAsync, so a cold start (TLS handshake + JIT) could burn it before the
+            // first Pair call — observed failing on a loaded CI runner. 2 s still proves
+            // expiry while leaving headroom for start-up; the assertions are unchanged.
+            o.PinMaxAge = TimeSpan.FromSeconds(2);
             return o;
         });
         using var client = env.CreateClient();
@@ -748,7 +753,7 @@ public sealed class FaultInjectionTests
         var fresh = await client.PairRawAsync(TestEnv.TestPin);
         Assert.True(fresh.IsSuccess, $"first pair: {fresh.Status} {fresh.ErrorCode}");
 
-        await Task.Delay(400); // the displayed PIN ages out
+        await Task.Delay(2500); // the displayed PIN ages out
 
         var expired = await client.PairRawAsync(TestEnv.TestPin); // correct, but too late
         Assert.Equal(403, expired.Status);

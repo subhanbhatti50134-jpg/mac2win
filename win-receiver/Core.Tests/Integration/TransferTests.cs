@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using Mac2WinReceiver.Core;
 using Mac2WinReceiver.Core.Server;
@@ -292,7 +292,19 @@ public sealed class TransferTests
         Assert.True(File.Exists(Path.Combine(dest, "README (2).txt")));
         Assert.True(File.Exists(Path.Combine(dest, "readme.txt")));
         Assert.False(File.Exists(Path.Combine(dest, "CON.txt")));
-        Assert.False(Directory.Exists(Path.Combine(dest, "cafe\u0301"))); // NFD must not survive
+        // NFD must not survive: compare the *stored* entry names instead of probing
+        // with an NFD path. APFS (macOS CI) is normalization-insensitive, so an NFD
+        // Directory.Exists probe resolves the NFC directory and masks the check;
+        // an ordinal comparison against the real directory entries cannot.
+        // Non-ASCII literals use \u escapes (see file header).
+        var storedNames = Directory.GetFileSystemEntries(dest)
+            .Select(Path.GetFileName)
+            .Where(n => n is not null)
+            .ToList();
+        Assert.DoesNotContain(storedNames,
+            n => string.Equals(n, "cafe\u0301", StringComparison.Ordinal));   // NFD spelling absent
+        Assert.Contains(storedNames,
+            n => string.Equals(n, "caf\u00E9", StringComparison.Ordinal));             // NFC present
         Assert.Equal(Data(19, 5), File.ReadAllBytes(Path.Combine(dest, "readme.txt")));
         Assert.Equal(Data(20, 6), File.ReadAllBytes(Path.Combine(dest, "README (2).txt")));
     }

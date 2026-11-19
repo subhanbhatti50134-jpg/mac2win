@@ -46,7 +46,7 @@ public enum PairingProof {
         let message = buildMessage(
             clientNonceB64: clientNonceB64, serverNonceB64: serverNonceB64,
             devicePublicKeyB64: devicePublicKeyB64)
-        return HMAC<SHA256>.isValidAuthenticationCode(presentedProof, for: message, using: key)
+        return HMAC<SHA256>.isValidAuthenticationCode(presentedProof, authenticating: message, using: key)
     }
 
     public static func hexString(_ data: Data) -> String {
