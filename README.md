@@ -21,8 +21,10 @@ and resumably. No cloud, no internet required.
 | **License** | MIT |
 
 > **Status:** in development — **v0.1.0**. The Windows receiver is built and tested on a
-> real machine; the macOS sender sources are written but not yet built (no Swift toolchain
-> on the development machine, see [ADR-010](docs/DECISIONS.md)).
+> real machine (158 tests); the Swift sender core is compiled and tested by CI on macOS,
+> including the real cross-implementation loopback against the .NET receiver. The SwiftUI
+> `.app`/DMG packaging is not yet built (needs Xcode + an Apple Developer ID, see
+> [ADR-010](docs/DECISIONS.md)).
 > See [`docs/SPEC.md`](docs/SPEC.md) for the full specification and
 > [`docs/VERIFICATION.md`](docs/VERIFICATION.md) for what is **actually** tested,
 > classified per milestone as `AUTOMATED` / `SIMULATED` / `REAL-DEVICE` / `NOT RUN`.
@@ -97,9 +99,10 @@ dotnet test win-receiver/WinReceiver.sln -c Release   # 158 tests
 | WPF window / startup smoke (STA) | `win-receiver/App.Tests` | 11 |
 | Performance budgets | `win-receiver/Perf.Tests` | 7 |
 
-CI (`.github/workflows/ci.yml`) runs the protocol-vector check and the Core suite on
-macOS and Linux, plus the full Windows build/test — and, once a Swift toolchain is
-available to CI, the real Swift ↔ .NET cross-implementation loopback test.
+CI (`.github/workflows/ci.yml`) runs five jobs on every push to `master`: the
+protocol-vector check, the full Windows build/test, the Core suite + Swift sender tests
+on macOS, the same Core suite on Linux, and the **real Swift ↔ .NET cross-implementation
+loopback test** (real TLS, real sockets, real files).
 
 ## License
 

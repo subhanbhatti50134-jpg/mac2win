@@ -20,11 +20,11 @@ run and recorded here as well.
 | Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` |
 | .NET protocol conformance (pairing HKDF/HMAC, manifest digest, chunk hashes+boundaries, error table, path policy, NFC, collisions) | AUTOMATED | PASSED | `dotnet test win-receiver/WinReceiver.sln` → **11/11 passed** (local, this machine) |
 | Swift sender core: same vector suite | AUTOMATED | PASSED | CI `macos` job: `swift test --package-path mac-sender/Core` green (run 44509698996). No Swift toolchain on Windows (ADR-010) |
-| GitHub Actions CI (all 4 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet. Steps: `git remote add origin <url> && git push -u origin main` → CI badge/link recorded here |
+| GitHub Actions CI (all 5 jobs) | AUTOMATED | PASSED | Run `44517082812` (2026-11-19): vectors, Windows build+tests, macOS, cross-impl, Linux all green; badge in README |
 | Windows receiver build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local) |
 | JSON Schemas validate sample messages | AUTOMATED | **NOT RUN** | Schema-validation test not yet implemented; planned for M1 with `JsonSchema.Net`/`ajv` in CI |
-| Cross-implementation test (Swift ↔ .NET, loopback, real TLS) | AUTOMATED | **NOT RUN** | M1 deliverable; runs on `macos-latest` (Swift + .NET both available there) |
-| Dependency vulnerability audit | AUTOMATED | **NOT RUN** | Wired in CI (`dotnet list package --vulnerable`); requires NuGet audit pass in M6 |
+| Cross-implementation test (Swift ↔ .NET, loopback, real TLS) | AUTOMATED | PASSED | CI run `44517082812` (2026-11-19): `CrossImplTransferTests.testEndToEndTransferVerifiesAgainstDotNetReceiver` green in the `cross-impl` job (real TLS, real sockets, real files) |
+| Dependency vulnerability audit | AUTOMATED | PASSED | CI run `44517082812`: `dotnet list win-receiver/WinReceiver.sln package --vulnerable --include-transitive` step green in the `windows` job (also run locally, M6 row below) |
 
 ## M1 — Walking skeleton (receiver core + protocol integration)
 
@@ -60,8 +60,8 @@ All rows below are from `dotnet test win-receiver/WinReceiver.sln -c Release` on
 | Out-of-order manifest batch → 400; digest mismatch → 400 | AUTOMATED | PASSED | `OutOfOrderManifestBatch_IsRejected`, `ManifestDigestMismatch_IsRejected` |
 | Corrupted chunk hash → 422 `E_CHUNK_HASH_MISMATCH`, retry succeeds | AUTOMATED | PASSED | `CorruptedChunkHash_IsRejected_AndNothingPersisted` (no `.m2wpart` persisted for the bad chunk) |
 | Windows receiver build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local, 2026-11-18) |
-| Cross-implementation test (Swift ↔ .NET, loopback, real TLS) | AUTOMATED | **NOT RUN** | `CrossImplTransferTests.testEndToEndTransferVerifiesAgainstDotNetReceiver`: full flow (pin → pair → hello → 2-batch manifest → confirm → chunk PUTs → commit → complete) with on-disk/source-identity/ledger invariants; harness `ReceiverHost --auto-approve --pin`; job `cross-impl` added to ci.yml. Not runnable locally (ADR-010, no macOS toolchain); no remote → CI **NOT RUN** |
-| GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet |
+| Cross-implementation test (Swift ↔ .NET, loopback, real TLS) | AUTOMATED | PASSED | CI run `44517082812` (2026-11-19), job `cross-impl`: `CrossImplTransferTests.testEndToEndTransferVerifiesAgainstDotNetReceiver` — full flow (pin → pair → hello → 2-batch manifest → confirm → chunk PUTs → commit → complete) with on-disk/source-identity/ledger invariants; harness `ReceiverHost --auto-approve --pin` (test harness only). Not runnable locally (ADR-010) |
+| GitHub Actions CI (all 5 jobs) | AUTOMATED | PASSED | Run `44517082812` (2026-11-19): all 5 jobs green |
 
 ## M2 — Security (pairing hardening, threat model, unauthorized/malicious clients)
 
@@ -105,8 +105,8 @@ All rows below are from `dotnet test win-receiver/WinReceiver.sln -c Release` on
 | `StartAsync` refuses protected destination before creating anything (T4, SPEC §6.2) | AUTOMATED | PASSED | `DestinationGuardTests.StartAsync_RejectsProtectedDestination` (destination dir does not exist afterwards) |
 | Golden vectors cover backslash + depth policy; docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` (path_policy.json gained 6 cases) |
 | Windows receiver build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local, 2026-11-18) |
-| Swift sender against M2 hardening (path policy parity on macOS) | AUTOMATED | **NOT RUN** | No Swift toolchain on Windows (ADR-010); `swift test --package-path mac-sender/Core` on macOS / `macos-latest` CI job |
-| GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet |
+| Swift sender against M2 hardening (path policy parity on macOS) | AUTOMATED | **NOT RUN** | No Swift test covers this yet: the Swift suite is 5 vector tests + 1 cross-impl e2e (all green in CI run `44517082812`); path policy is exercised on the .NET side only. ADR-010 — add a Swift parity test to flip this row |
+| GitHub Actions CI (all 5 jobs) | AUTOMATED | PASSED | Run `44517082812` (2026-11-19): all 5 jobs green |
 
 ## M3 — Resilience (fault injection, crash consistency, idempotent retry)
 
@@ -136,13 +136,13 @@ warnings. ADR-017 records the persistence/chaos-proxy decisions.
 | Trusted devices + session tokens survive receiver restart (ADR-017) | AUTOMATED | PASSED | Both hard-kill tests: `ReauthenticateAsync` (hello with same EC key, no PIN) + `GetSessionAsync` returns identical session token after restart |
 | Windows receiver build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local, 2026-11-18) |
 | Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` |
-| Sender (Swift) crash-resume, mtime re-check, hard-kill of sender | AUTOMATED | **NOT RUN** | Swift sender not runnable on Windows (ADR-010): `swift test --package-path mac-sender/Core` on macOS / `macos-latest` CI job |
-| Hard-kill of *sender* and receiver (SPEC §10 full wording) | AUTOMATED | **NOT RUN** | Receiver-side half is the two hard-kill tests above (SIMULATED sender: test client reconnects). Real sender kill needs the Swift app ⇒ macOS CI |
+| Sender (Swift) crash-resume, mtime re-check, hard-kill of sender | AUTOMATED | **NOT RUN** | No Swift test covers this yet: the Swift suite is 5 vector tests + 1 cross-impl e2e (all green in CI run `44517082812`). Sender-side fault tests or the real app are needed (ADR-010) |
+| Hard-kill of *sender* and receiver (SPEC §10 full wording) | AUTOMATED | **NOT RUN** | Receiver-side half is the two hard-kill tests above (SIMULATED sender: test client reconnects). Real sender kill needs the real Swift `.app` (not yet built, ADR-010) |
 | UI-driven end-to-end transfer: Ready → pair → approve → transfer → progress → history → export → stop | AUTOMATED | PASSED | `SmokeTest.UiDrivenTransfer_EndToEnd` (real TLS, `ProtocolTestClient` as Mac, on-disk SHA-256 == source, JSON/CSV/HTML export) |
 | UI updates throttled ~15 Hz, never block UI thread | — | PASSED | `ReceiverViewModel` uses `DispatcherTimer` (67 ms ≈ 15 Hz); server callbacks marshal to UI thread via `Dispatcher`; no `await` in UI event handlers |
 | Windows receiver + App build (Release, warnings-as-errors) | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` → 0 warnings, 0 errors (local, 2026-11-18) |
 | Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` (PROTOCOL.md §2.8 amended for optional `applyToAllDefault` + confirm response echo) |
-| GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet; `macos`/`linux`/`cross-impl` use project-scoped paths (WPF not on non-Windows), `windows` keeps the solution |
+| GitHub Actions CI (all 5 jobs) | AUTOMATED | PASSED | Run `44517082812` (2026-11-19): all 5 jobs green; `macos`/`linux`/`cross-impl` use project-scoped paths (WPF not on non-Windows), `windows` keeps the solution |
 
 ## M5 — Performance
 
@@ -175,7 +175,7 @@ All rows below from `dotnet test win-receiver/WinReceiver.sln -c Release` on thi
 | Build warnings-as-errors: 0 warnings, 0 errors | AUTOMATED | PASSED | `dotnet build win-receiver/WinReceiver.sln -c Release` |
 | Vectors current + docs mirror in sync | AUTOMATED | PASSED | `python tools/gen_vectors.py --check` → `OK: 5 vector files current; docs mirror in sync.` |
 | CI YAML valid | AUTOMATED | PASSED | `npx --yes js-yaml .github/workflows/ci.yml` → OK |
-| GitHub Actions CI (all 5 jobs) | AUTOMATED | **NOT RUN** | No GitHub remote yet |
+| GitHub Actions CI (all 5 jobs) | AUTOMATED | PASSED | Run `44517082812` (2026-11-19): all 5 jobs green |
 
 ## M7 — Release
 
@@ -190,8 +190,8 @@ Installer packaging prepared (actual builds require tooling not on this workstat
 | Windows installer code-signing (signtool) | REAL-DEVICE | **NOT RUN** | no code-signing cert |
 | macOS packaging skeleton: Info.plist, Entitlements.plist, build_dmg.sh | — | PASSED | `mac-sender/App/{Info.plist,Entitlements.plist,build_dmg.sh}` |
 | macOS SwiftUI app sources | — | PASSED | `mac-sender/App/Sources/Mac2WinSender/`; built by the Xcode project via `build_dmg.sh` (SwiftPM rejects targets outside the package root — CI caught this, see defect section below) |
-| macOS universal .app + signed DMG (xcodebuild + codesign + notarytool + stapler) | REAL-DEVICE | **NOT RUN** | no Xcode/Swift on Windows (ADR-010); runs on `macos-latest` CI |
-| GitHub Actions CI (vectors, Windows build+tests, macOS, cross-impl, Linux) | AUTOMATED | PASSED | `.github/workflows/ci.yml` runs on every push to `master` (5 jobs); status badge in README |
+| macOS universal .app + signed DMG (xcodebuild + codesign + notarytool + stapler) | REAL-DEVICE | **NOT RUN** | no Xcode/Swift on Windows (ADR-010); `build_dmg.sh` is not wired into CI yet and needs Apple Developer ID credentials |
+| GitHub Actions CI (vectors, Windows build+tests, macOS, cross-impl, Linux) | AUTOMATED | PASSED | Run `44517082812` (2026-11-19) all green on every push to `master` (`.github/workflows/ci.yml`); status badge in README |
 | GitHub Actions release job (publish installer artifacts) | AUTOMATED | **NOT RUN** | no release job defined in `ci.yml` yet |
 
 ## Post-release defects found by running the 0.1.0 installer (2026-11-19)
